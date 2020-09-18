@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block header_title %}
+<title>Library</title>
+{% endblock %}
+
+{% block body_title %}
+<h1 class="py-2">Library</h1>
+{% endblock %}
+
+{% block body_content %}
+<ul>
+  {% for tag in tags %}
+  <li>{{ tag }}</li>
+  {% endfor %}
+</ul>
+{% endblock %}
