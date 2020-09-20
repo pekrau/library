@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block content %}
+<table class="table table-borderless py-2">
+  <tr>
+    <td>Title</td>
+    <th>{{ book.title }}</th>
+  </tr>
+  <tr>
+    <td>Author{{ 's' if len(book.authors) > 1 else '' }}</td>
+    <th>
+      {% set stop = len(book.authors) - 1 %}
+      {% for pos, author in enumerate(book.authors) %}
+      {{ author | author_link }}
+      {% if pos != stop %}
+      <span class="mr-2">;</span>
+      {% endif %}
+      {% endfor %}
+    </th>
+  </tr>
+  <tr>
+    <td>Published</td>
+    <th>{{ book.published }}</th>
+  </tr>
+  <tr>
+    <td>ISBN</td>
+    <th>{{ book.isbn }}</th>
+  </tr>
+  <tr>
+    <td>ISBN13</td>
+    <th>{{ book.isbn13 }}</th>
+  </tr>
+  <tr>
+    <td>Bookshelves</td>
+    <th>
+      {% for bookshelf in sorted(book.bookshelves) %}
+      <a href="{{ url_base }}{{ bookshelf }}.html">{{ bookshelf }}</a>
+      <br>
+      {% endfor %}
+    </th>
+  <tr>
+    <td>Goodreads ID</td>
+    <th>
+      <a href="{{ goodreads_url_base }}{{ book.id }}">{{ book.id }}</a>
+    </th>
+  </tr>
+  </tr>
+</table>
+{% endblock %}

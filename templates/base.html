@@ -13,9 +13,9 @@
     {% endblock %}
   </head>
   <body>
-    <nav class="navbar navbar-expand-md navbar-light"
-         style="background-color: #e8e8e8;">
-      <a class="navbar-brand" href="/library">Library</a>
+    <nav class="navbar navbar-expand-md navbar-light bg-light"
+       >
+      <a class="navbar-brand" href="{{ url_base }}index.html">Library</a>
       <button type="button" class="navbar-toggler navbar-toggler-right"
               data-toggle="collapse" data-target="#top_navbar"
               aria-controls="top_navbar" aria-expanded="false"
@@ -25,40 +25,52 @@
       <div class="collapse navbar-collapse" id="top_navbar">
         <ul class="navbar-nav mr-auto">
           <li class="nav-item">
-            <a class="nav-link" href="/all.html">
-              All</a>
+            <a class="nav-link" href="{{ url_base }}all.html">
+              All books
+            </a>
           </li>
           <li class="nav-item dropdown">
-            <a class="nav-link dropdown-toggle" 
-               href="#" 
-               id="navbarDropdown" role="button"
-               data-toggle="dropdown"
+            <a class="nav-link dropdown-toggle" href="#" 
+               id="bookshelvesDropdown" role="button" data-toggle="dropdown"
                aria-haspopup="true" aria-expanded="false">
-              Dropdown
+              Bookshelves
             </a>
-            <div class="dropdown-menu" aria-labelledby="navbarDropdown">
-              <a class="dropdown-item" href="#">Action</a>
-              <a class="dropdown-item" href="#">Another action</a>
-              <div class="dropdown-divider"></div>
-              <a class="dropdown-item" href="#">Something else here</a>
+            <div class="dropdown-menu" aria-labelledby="bookshelvesDropdown">
+              {% for bookshelf in bookshelves %}
+              <a class="dropdown-item"
+                 href="{{ url_base }}{{ bookshelf }}.html">
+                {{ bookshelf }}</a>
+              {% endfor %}
             </div>
           </li>
         </ul>
+        <ul class="navbar-nav justify-content-end">
+          <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle" href="#" 
+               id="aboutDropdown" role="button" data-toggle="dropdown"
+               aria-haspopup="true" aria-expanded="false">
+              About
+            </a>
+            <div class="dropdown-menu dropdown-menu-right"
+                 aria-labelledby="aboutDropdown">
+              <button class="dropdown-item">Source: {{ source }}</a>
+              <button class="dropdown-item">Total: {{ total_books }} books</a>
+            </div>
+          </li>
+          <li
       </div>
     </nav>
 
     <div class="container">
-      
+      {% block container %}
       <div class="row">
         <div class="col-md">
-          {% block body_title %}
-          <h1>{{ page_title }}</h1>
-          {% endblock %}
-          {% block body_content %}
+          <h1 class="py-3">{{ page_title }}</h1>
+          {% block content %}
           {% endblock %}
         </div>
       </div>
-
+      {% endblock %}
     </div>
 
     <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js" 

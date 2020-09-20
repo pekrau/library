@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block content %}
+<dl class="row">
+  {% for book in books %}
+  <dt class="col-md-2">
+    <a href="books/{{ book.ref.replace(' ', '-') }}.html">{{ book.ref }}</a>
+  </dt>
+  <dd class="col-md-10">
+    {{ book.title }}
+    <br>
+    {% set stop = len(book.authors) - 1 %}
+    {% for pos, author in enumerate(book.authors) %}
+    {{ author | author_link }}
+    {% if pos != stop %}
+    <span class="mr-2">;</span>
+    {% endif %}
+    {% endfor %}
+  </dd>
+  {% endfor %}
+</dl>
+{% endblock %}

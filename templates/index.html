@@ -4,14 +4,27 @@
 <title>Library</title>
 {% endblock %}
 
-{% block body_title %}
-<h1 class="py-2">Library</h1>
-{% endblock %}
-
-{% block body_content %}
-<ul>
-  {% for tag in tags %}
-  <li>{{ tag }}</li>
-  {% endfor %}
-</ul>
+{% block container %}
+<div class="row pt-2">
+  <div class="col-md">
+    <h2>Bookshelves</h2>
+      <ul class="list-unstyled">
+        {% for bookshelf in bookshelves %}
+        <li>
+          <a href="{{ bookshelf }}.html">{{ bookshelf.replace('-', ' ') }}</a>
+        </li>
+        {% endfor %}
+      </ul>
+  </div>
+  <div class="col-md">
+    <h2>Authors alphabetically</h2>
+      <ul class="list-unstyled">
+        {% for alphabet in alphabetical %}
+        <li>
+          <a href="{{ alphabet }}.html">{{ alphabet }}<a>
+        </li>
+        {% endfor %}
+      </ul>
+  </div>
+</div>
 {% endblock %}
