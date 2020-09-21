@@ -1,0 +1,10 @@
+{# Include file for display of bookshelves. #}
+[
+{% set stop = len(bookshelves) - 1 %}
+{% for pos, bookshelf in enumerate(sorted(bookshelves)) %}
+{{ bookshelf | bookshelf_link }}
+{% if pos != stop %}
+<span class="mr-2">,</span>
+{% endif %}
+{% endfor %}
+]

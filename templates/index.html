@@ -8,23 +8,23 @@
 <div class="row pt-2">
   <div class="col-md">
     <h2>Bookshelves</h2>
-      <ul class="list-unstyled">
-        {% for bookshelf in bookshelves %}
-        <li>
-          <a href="{{ bookshelf }}.html">{{ bookshelf.replace('-', ' ') }}</a>
-        </li>
-        {% endfor %}
-      </ul>
+    <ul class="list-unstyled">
+      {% for bookshelf in bookshelves %}
+      <li>
+        <a href="{{ bookshelf }}.html">{{ bookshelf }}</a>
+      </li>
+      {% endfor %}
+    </ul>
   </div>
   <div class="col-md">
-    <h2>Authors alphabetically</h2>
-      <ul class="list-unstyled">
-        {% for alphabet in alphabetical %}
-        <li>
-          <a href="{{ alphabet }}.html">{{ alphabet }}<a>
-        </li>
-        {% endfor %}
-      </ul>
+    <h2>Authors</h2>
+    <ul class="list-unstyled">
+      {% for alphabet in alphabetical %}
+      <li>
+        <a href="{{ alphabet }}.html">{{ alphabet }}<a>
+      </li>
+      {% endfor %}
+    </ul>
   </div>
 </div>
 {% endblock %}

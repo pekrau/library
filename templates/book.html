@@ -33,17 +33,15 @@
   <tr>
     <td>Bookshelves</td>
     <th>
-      {% for bookshelf in sorted(book.bookshelves) %}
-      <a href="{{ url_base }}{{ bookshelf }}.html">{{ bookshelf }}</a>
-      <br>
-      {% endfor %}
+      {% set bookshelves = book.bookshelves %}
+      {% include 'bookshelves.html' %}
     </th>
+  </tr>
   <tr>
     <td>Goodreads ID</td>
     <th>
       <a href="{{ goodreads_url_base }}{{ book.id }}">{{ book.id }}</a>
     </th>
-  </tr>
   </tr>
 </table>
 {% endblock %}

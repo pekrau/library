@@ -4,7 +4,8 @@
 <dl class="row">
   {% for book in books %}
   <dt class="col-md-2">
-    <a href="books/{{ book.ref.replace(' ', '-') }}.html">{{ book.ref }}</a>
+    <a href="{{ url_base }}books/{{ book.ref.replace(' ', '-') }}.html">
+      {{ book.ref }}</a>
   </dt>
   <dd class="col-md-10">
     {{ book.title }}
@@ -16,6 +17,9 @@
     <span class="mr-2">;</span>
     {% endif %}
     {% endfor %}
+    <br>
+    {% set bookshelves = book.bookshelves %}
+    {% include 'bookshelves.html' %}
   </dd>
   {% endfor %}
 </dl>

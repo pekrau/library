@@ -13,8 +13,7 @@
     {% endblock %}
   </head>
   <body>
-    <nav class="navbar navbar-expand-md navbar-light bg-light"
-       >
+    <nav class="navbar navbar-light bg-warning navbar-expand-md">
       <a class="navbar-brand" href="{{ url_base }}index.html">Library</a>
       <button type="button" class="navbar-toggler navbar-toggler-right"
               data-toggle="collapse" data-target="#top_navbar"
@@ -43,6 +42,20 @@
               {% endfor %}
             </div>
           </li>
+          <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle" href="#" 
+               id="authorslDropdown" role="button" data-toggle="dropdown"
+               aria-haspopup="true" aria-expanded="false">
+              Authors
+            </a>
+            <div class="dropdown-menu" aria-labelledby="authorsDropdown">
+              {% for alpha in alphabetical %}
+              <a class="dropdown-item"
+                 href="{{ url_base }}{{ alpha }}.html">
+                {{ alpha }}</a>
+              {% endfor %}
+            </div>
+          </li>
         </ul>
         <ul class="navbar-nav justify-content-end">
           <li class="nav-item dropdown">
@@ -55,6 +68,7 @@
                  aria-labelledby="aboutDropdown">
               <button class="dropdown-item">Source: {{ source }}</a>
               <button class="dropdown-item">Total: {{ total_books }} books</a>
+              <button class="dropdown-item">Updated: {{ updated }}</a>
             </div>
           </li>
           <li
@@ -71,6 +85,11 @@
         </div>
       </div>
       {% endblock %}
+      <div class="row">
+        <div class="col-md">
+          <hr>
+        </div>
+      </div>
     </div>
 
     <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js" 

@@ -1,9 +1,10 @@
 "Build the 'docs' contents from the latest CSV file from Goodreads."
 
-__version__ = '0.1.0'
+__version__ = '0.1.1'
 
 import collections
 import csv
+import datetime
 import json
 import os
 import os.path
@@ -11,6 +12,7 @@ import string
 
 import jinja2
 
+URL_BASE           = '/library/'
 GOODREADS_PATH     = os.path.expanduser('~/Dropbox/archive/goodreads')
 DOCS_PATH          = os.path.join(os.getcwd(), 'docs')
 CORRECTIONS_PATH   = os.path.join(os.getcwd(), 'corrections')
@@ -117,6 +119,7 @@ for book in books:
         alphabetical.add(author[0][0].upper())
 alphabetical = sorted(alphabetical)
 
+# The Jinja2 template processing environment.
 env = jinja2.Environment(
     loader=jinja2.FileSystemLoader(TEMPLATES_PATH),
     autoescape=jinja2.select_autoescape(['html'])
@@ -125,19 +128,29 @@ env.globals['len'] = len
 env.globals['sorted'] = sorted
 env.globals['enumerate'] = enumerate
 env.globals['format_authors'] = lambda authors: '; '.join([f"{a[0]}, {a[1]}" for a in authors])
-env.globals['url_base'] = ''
+env.globals['url_base'] = URL_BASE
 env.globals['goodreads_url_base'] = GOODREADS_URL_BASE
 env.globals['source'] = filename
 env.globals['total_books'] = len(books)
+env.globals['updated'] = datetime.datetime.today().strftime("%Y-%m-%d %H:%M:%S")
 env.globals['bookshelves'] = bookshelves
+env.globals['alphabetical'] = alphabetical
 
 @jinja2.environmentfilter
 def author_link(env, author):
+    "Filter for author data to author link."
     name = f"{author[0]}, {author[1]}"
     filename = f"{author[0]} {author[1]}.html".replace(' ', '-')
     href = f"{env.globals['url_base']}authors/{filename}"
     return jinja2.Markup(f'<a href="{href}">{name}</a>')
 env.filters['author_link'] = author_link
+
+@jinja2.environmentfilter
+def bookshelf_link(env, bookshelf):
+    "Filter for bookshelf to bookshelf link."
+    href = f"{env.globals['url_base']}{bookshelf}.html"
+    return jinja2.Markup(f'<a href="{href}">{bookshelf}</a>')
+env.filters['bookshelf_link'] = bookshelf_link
 
 # Record all files written in this run.
 written = set()
@@ -146,7 +159,7 @@ written = set()
 template = env.get_template('index.html')
 path = os.path.join(DOCS_PATH, 'index.html')
 with open(path, 'w') as outfile:
-    outfile.write(template.render(alphabetical=alphabetical))
+    outfile.write(template.render())
 written.add(path)
 
 # Books subdirectory and book pages.
@@ -159,8 +172,7 @@ for book in books:
     path = os.path.join(DOCS_PATH, 'books', book.ref.replace(' ', '-'))
     path += '.html'
     with open(path, 'w') as outfile:
-        outfile.write(template.render(url_base='../',
-                                      page_title=book.ref,
+        outfile.write(template.render(page_title=book.ref,
                                       book=book))
     written.add(path)
 
@@ -179,7 +191,7 @@ for bookshelf in bookshelves:
     with open(path, 'w') as outfile:
         outfile.write(
             template.render(
-                page_title=f"Bookshelf {bookshelf.replace('-', ' ')}",
+                page_title=f"Bookshelf {bookshelf}",
                 books=sorted([b for b in books if bookshelf in b.bookshelves],
                              key=lambda b: b.ref)))
     written.add(path)
@@ -206,11 +218,27 @@ for author, books in author_lookup_books.items():
                 books=sorted(books, key=lambda b: b.ref)))
     written.add(path)
 
-# Author lists by first letter of family name.
-char_lookup_authors = {}
+# Authors list pages by first letter of family name.
+alpha_lookup_authors = {}
 for author in authors:
-    char = author[0][0].upper()
-    char_lookup_authors.setdefault(char, []).append(author)
+    alpha = author[0][0].upper()
+    alpha_lookup_authors.setdefault(alpha, []).append(author)
 
+template = env.get_template('authors.html')
+for alpha in alpha_lookup_authors.keys():
+    authors = sorted(alpha_lookup_authors[alpha])
+    alpha = alpha.upper()
+    path = os.path.join(DOCS_PATH, f"{alpha}.html")
+    with open(path, 'w') as outfile:
+        outfile.write(template.render(page_title=f"Authors: {alpha}",
+                                      authors=authors))
+    written.add(path)
+
+for dirpath, dirnames, filenames in os.walk(DOCS_PATH):
+    for filename in filenames:
+        path = os.path.join(dirpath, filename)
+        if path not in written:
+            print('deleting', path)
+            os.remove(path)
 
 print(len(written), 'files written')
