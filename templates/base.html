@@ -23,11 +23,6 @@
       </button>
       <div class="collapse navbar-collapse" id="top_navbar">
         <ul class="navbar-nav mr-auto">
-          <li class="nav-item">
-            <a class="nav-link" href="{{ url_base }}all.html">
-              All books
-            </a>
-          </li>
           <li class="nav-item dropdown">
             <a class="nav-link dropdown-toggle" href="#" 
                id="bookshelvesDropdown" role="button" data-toggle="dropdown"
@@ -55,6 +50,25 @@
                 {{ alpha }}</a>
               {% endfor %}
             </div>
+          </li>
+          <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle" href="#" 
+               id="ratingslDropdown" role="button" data-toggle="dropdown"
+               aria-haspopup="true" aria-expanded="false">
+              Ratings
+            </a>
+            <div class="dropdown-menu" aria-labelledby="ratingsDropdown">
+              {% for rating in ratings %}
+              <a class="dropdown-item"
+                 href="{{ url_base }}{{ rating }}.html">
+                {{ rating }}</a>
+              {% endfor %}
+            </div>
+          </li>
+          <li class="nav-item">
+            <a class="nav-link" href="{{ url_base }}all.html">
+              All books
+            </a>
           </li>
         </ul>
         <ul class="navbar-nav justify-content-end">

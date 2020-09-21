@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block content %}
-<table class="table table-borderless py-2">
+<table class="table table-sm table-borderless py-2">
   <tr>
     <td>Title</td>
     <th>{{ book.title }}</th>
@@ -42,6 +42,25 @@
     <th>
       <a href="{{ goodreads_url_base }}{{ book.id }}">{{ book.id }}</a>
     </th>
+  </tr>
+  <tr>
+    <td>Rating</td>
+    <th>
+      {% if book.rating != '0' %}
+      {{ book.rating }}
+      {% else %}
+      -
+      {% endif %}
+    </th>
+  </tr>
+  <tr>
+    <td>Review</td>
+    <th>
+      {% if book.review %}
+      {{ book.review | safe }}</th>
+      {% else %}
+      -
+      {% endif %}
   </tr>
 </table>
 {% endblock %}

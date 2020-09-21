@@ -1,6 +1,6 @@
 "Build the 'docs' contents from the latest CSV file from Goodreads."
 
-__version__ = '0.1.1'
+__version__ = '0.1.2'
 
 import collections
 import csv
@@ -119,6 +119,13 @@ for book in books:
         alphabetical.add(author[0][0].upper())
 alphabetical = sorted(alphabetical)
 
+# Find all ratings.
+ratings = set()
+for book in books:
+    if book.rating != '0':
+        ratings.add(book.rating)
+ratings = sorted(ratings, reverse=True)
+
 # The Jinja2 template processing environment.
 env = jinja2.Environment(
     loader=jinja2.FileSystemLoader(TEMPLATES_PATH),
@@ -135,6 +142,7 @@ env.globals['total_books'] = len(books)
 env.globals['updated'] = datetime.datetime.today().strftime("%Y-%m-%d %H:%M:%S")
 env.globals['bookshelves'] = bookshelves
 env.globals['alphabetical'] = alphabetical
+env.globals['ratings'] = ratings
 
 @jinja2.environmentfilter
 def author_link(env, author):
@@ -208,14 +216,14 @@ for book in books:
     for author in book.authors:
         author_lookup_books.setdefault(author, []).append(book)
 
-for author, books in author_lookup_books.items():
+for author, author_books in author_lookup_books.items():
     filename = f"{author[0]} {author[1]}.html".replace(' ', '-')
     path = os.path.join(DOCS_PATH, 'authors', filename)
     with open(path, 'w') as outfile:
         outfile.write(
             template.render(
                 page_title=f"{author[0]}, {author[1]}",
-                books=sorted(books, key=lambda b: b.ref)))
+                books=sorted(author_books, key=lambda b: b.ref)))
     written.add(path)
 
 # Authors list pages by first letter of family name.
@@ -234,6 +242,20 @@ for alpha in alpha_lookup_authors.keys():
                                       authors=authors))
     written.add(path)
 
+# Ratings pages.
+template = env.get_template('list.html')
+for rating in ratings:
+    path = os.path.join(DOCS_PATH, f"{rating}.html")
+    with open(path, 'w') as outfile:
+        outfile.write(
+            template.render(
+                page_title=f"Rating {rating}",
+                books=sorted([b for b in books if rating==b.rating],
+                             key=lambda b: b.ref)))
+    written.add(path)
+
+
+# Remove pages not written in this run.
 for dirpath, dirnames, filenames in os.walk(DOCS_PATH):
     for filename in filenames:
         path = os.path.join(dirpath, filename)
