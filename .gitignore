@@ -1,0 +1,5 @@
+.env*
+.sesskey
+*~
+*.log
+__pycache__
