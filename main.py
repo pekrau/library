@@ -1,6 +1,6 @@
 "NiceGUI-based interface to library data."
 
-__version__ = "0.0.1"
+__version__ = "0.2.0"
 
 import calendar
 import datetime
@@ -18,15 +18,19 @@ import yaml
 
 dotenv.load_dotenv()
 
+MAX_ROWS = 40
 FILENAME_CHARACTERS = set(string.ascii_letters + string.digits + "-")
 FRONTMATTER = re.compile(r"^---([\n\r].*?[\n\r])---[\n\r](.*)$", re.DOTALL)
 
 MONTHS = dict(
-    [(name.lower(), number) for number, name in enumerate(calendar.month_name[1:])]
+    [(name.lower(), number + 1) for number, name in enumerate(calendar.month_name[1:])]
 )
 MONTHS.update(
     dict(
-        [(name.lower(), number) for number, name in enumerate(calendar.month_abbr[1:])]
+        [
+            (name.lower(), number + 1)
+            for number, name in enumerate(calendar.month_abbr[1:])
+        ]
     )
 )
 
@@ -40,60 +44,20 @@ def normalize(s):
     return result.casefold()
 
 
-def header(title, color="green", edit=None, delete=None):
-    with ui.header().classes(f"text-h5 bg-{color}-500"):
-        with ui.button(icon="menu").props("color=dark"):
-            with ui.menu():
-                ui.menu_item("Home", lambda: ui.navigate.to("/"))
-                if edit:
-                    ui.menu_item("Edit", lambda: ui.navigate.to(edit))
-                if delete:
-                    ui.menu_item("Delete", lambda: ui.navigate.to(delete))
-                ui.menu_item("Add BibTex", lambda: ui.navigate.to("/bibtex"))
-                ui.menu_item("Add article", lambda: ui.navigate.to("/article"))
-                ui.menu_item("Add book", lambda: ui.navigate.to("/book"))
-        ui.label(title)
-
-
-def items_table(items):
-    ui.table(
-        columns=[
-            dict(name="reference", label="Reference", field="reference", align="left"),
-            dict(name="title", label="Title", field="title", align="left"),
-            dict(name="authors", label="Authors", field="authors", align="left"),
-            dict(name="year", label="Year", field="year", align="left"),
-        ],
-        rows=[
-            dict(
-                reference=i.reference,
-                title=i.title,
-                authors="; ".join(i.authors),
-                year=i.year,
-                url=i.url,
-            )
-            for i in items
-        ],
-        row_key="name",
-    ).props("bordered").on(
-        "row-click", lambda e: ui.navigate.to(e.args[1]["url"], new_tab=True)
-    )
-
-
 class Library:
 
     def __init__(self):
         self.root_dir = pathlib.Path(os.environ["LIBRARY_DIR"])
         self.trash_dir = self.root_dir / "trash"
-        self.items = {}
+        self.items = {}  # Key: identifier (normalized reference), value: instance.
+        self.configfilepath = self.root_dir / "config.yaml"
+        self.tags = []
 
     def __contains__(self, reference):
         return normalize(reference) in self.items
 
     def __getitem__(self, reference):
         return self.items[normalize(reference)]
-
-    def __call__(self):
-        return sorted(self.items.values(), key=lambda i: i.modified)
 
     def read(self, filepath=os.environ["LIBRARY_DIR"]):
         "Read all items in the library data directory."
@@ -112,9 +76,35 @@ class Library:
                 case _:
                     sys.exit(f"Error: type-less item '{filename}'")
             self.items[item.identifier] = item
+        if self.configfilepath.exists():
+            config = yaml.safe_load(self.configfilepath.read_text())
+            self.tags = sorted(config.get("tags", []), key=lambda t: t.casefold())
+
+    def add_tag(self, tag):
+        tags = set(self.tags)
+        tags.add(tag)
+        self.tags = sorted(tags, key=lambda t: t.casefold())
+
+    def write_tags(self):
+        with self.configfilepath.open(mode="w", encoding="utf-8") as outfile:
+            outfile.write(yaml.safe_dump(dict(tags=self.tags), allow_unicode=True))
+
+    def get_tag(self, value):
+        for tag in self.tags:
+            if tag == value:
+                return tag
+            elif normalize(tag) == value:
+                return tag
+        return None
+
+    def count_tagged_items(self, tag):
+        return len([i for i in self.items.values() if tag in i.tags])
 
     def parse_bibtex(self, text):
-        "Parse the items in the BibTex source text and add to the library."
+        """Parse the items in the BibTex source text.
+        Add to the library.
+        Return the items in a list."
+        """
         result = []
         for entry in bibtexparser.parse_string(text).entries:
             match entry.entry_type:
@@ -125,7 +115,7 @@ class Library:
                 case _:
                     raise ValueError(f"cannot handle BibTex type '{entry.entry_type}'")
             item.from_bibtex(dict([(f.key, f.value) for f in entry.fields]))
-            # Construct the reference and insert into library
+            # Set the reference, which adds it to the library.
             base_reference = f"{item.authors[0].split(',')[0].strip()} {item.year}"
             reference = base_reference
             letters = list(string.ascii_lowercase)
@@ -135,6 +125,113 @@ class Library:
             item.write()
             result.append(item)
         return result
+
+    def parse_bibtex_notify(self, text):
+        """Parse the items in the BibTex source text.
+        Add to the library.
+        Notify about the result.
+        Redirect to the home page, where the most recent items will be shown.
+        """
+        try:
+            items = self.parse_bibtex(text)
+        except ValueError as error:
+            ui.notify(str(error), type="negative")
+        else:
+            ui.notify(f"{len(items)} items parsed", type="positive")
+        ui.navigate.to("/")
+
+    def table_setup(self, title="", author="", year="", tags=None, text=""):
+        with ui.row(align_items="baseline"):
+            self.title_filter = ui.input(label="Title", value=title)
+            self.author_filter = ui.input(label="Author", value=author)
+            self.year_filter = ui.input(label="Year", value=year)
+            self.tags_filter = (
+                ui.select(library.tags, label="Tags", multiple=True, value=tags)
+                .classes("w-80")
+                .props("use-chips")
+            )
+            self.text_filter = ui.input(label="Text", value=text)
+            ui.button("Filter", on_click=lambda: self.table_refresh())
+            ui.button("Clear", on_click=lambda: self.table_inputs_clear())
+        self.table(title=title, author=author, year=year, tags=tags, text=text)
+
+    def table_refresh(self):
+        args = dict()
+        args["title"] = self.title_filter.value.strip()
+        args["author"] = self.author_filter.value.strip()
+        args["year"] = self.year_filter.value.strip()
+        args["tags"] = self.tags_filter.value
+        args["text"] = self.text_filter.value.strip()
+        self.table.refresh(**args)
+
+    def table_inputs_clear(self):
+        self.title_filter.set_value("")
+        self.author_filter.set_value("")
+        self.year_filter.set_value("")
+        self.tags_filter.set_value(None)
+        self.text_filter.set_value("")
+        self.table_refresh()
+
+    @ui.refreshable
+    def table(self, title=None, author=None, year=None, tags=None, text=None):
+        items = self.items.values()
+        if title:
+            title = title.casefold()
+            items = [i for i in items if title in i.title.casefold()]
+        if author:
+            author = author.casefold()
+            items = [
+                i for i in items if author in "\n".join(i.authors_short).casefold()
+            ]
+        if year:
+            items = [i for i in items if i.year.startswith(year)]
+        if tags:
+            tags = set(tags)
+            items = [i for i in items if not tags.difference(set(i.tags))]
+        if text:
+            text = text.casefold()
+            items = [i for i in items if text in i.text.casefold()]
+        items = list(sorted(items, key=lambda i: i.modified, reverse=True))
+        total = len(items)
+        items = items[:MAX_ROWS]
+        ui.table(
+            columns=[
+                dict(
+                    name="reference", label="Reference", field="reference", align="left"
+                ),
+                dict(
+                    name="title",
+                    label="Title",
+                    field="title",
+                    align="left",
+                    style="text-wrap: wrap",
+                ),
+                dict(
+                    name="authors",
+                    label="Authors",
+                    field="authors",
+                    align="left",
+                    style="text-wrap: wrap",
+                ),
+                dict(name="year", label="Year", field="year", align="left"),
+            ],
+            rows=[
+                dict(
+                    reference=i.reference,
+                    title=i.title,
+                    authors="; ".join(i.authors_short),
+                    year=i.year,
+                    url=i.view_url,
+                )
+                for i in items
+            ],
+            row_key="name",
+        ).props("bordered").on("row-click", lambda e: ui.navigate.to(e.args[1]["url"]))
+        with ui.row():
+            if total > len(items):
+                ui.label(f"{len(items)} items shown,").classes("text-bold")
+            ui.label(f"{total} items found,")
+            ui.label(f"{len(library.items)} total items.")
 
 
 class Item:
@@ -180,23 +277,40 @@ class Item:
 
     @property
     def modified(self):
-        return datetime.datetime.fromtimestamp((self.filepath.stat().st_mtime))
+        return datetime.datetime.fromtimestamp(
+            (self.filepath.stat().st_mtime)
+        ).strftime("%Y-%m-%d %H:%M:%S")
 
     @property
     def title(self):
-        return self.frontmatter.get("title") or ""
+        return self.frontmatter.get("title", "")
 
     @property
     def authors(self):
-        return self.frontmatter.get("authors") or []
+        return self.frontmatter.get("authors", [])
 
     @property
-    def published(self):
-        return self.frontmatter.get("published") or ""
+    def authors_short(self):
+        authors = self.authors
+        if len(authors) > 7:
+            authors = authors[:3] + ["..."] + authors[-2:]
+        return authors
+
+    @property
+    def tags(self):
+        return sorted(self.frontmatter.get("tags") or [], key=lambda t: t.casefold())
 
     @property
     def year(self):
-        return self.frontmatter.get("year") or ""
+        return self.frontmatter.get("year", "")
+
+    @property
+    def published(self):
+        return self.frontmatter.get("published", "")
+
+    @property
+    def number(self):
+        return self.frontmatter.get("number") or ""
 
     @property
     def pages(self):
@@ -207,20 +321,31 @@ class Item:
         return self.frontmatter.get("doi") or ""
 
     @property
-    def pmid(self):
-        return self.frontmatter.get("pmid") or ""
+    def publisher(self):
+        return self.frontmatter.get("publisher") or ""
 
     @property
-    def url(self):
+    def address(self):
+        return self.frontmatter.get("address") or ""
+
+    @property
+    def view_url(self):
         return f"/view/{self.identifier}"
+
+    @property
+    def edit_url(self):
+        return f"/edit/{self.identifier}"
+
+    @property
+    def delete_url(self):
+        return f"/delete/{self.identifier}"
 
     def from_bibtex(self, fields):
         assert not self.reference
-        global library
         self.frontmatter["title"] = fields["title"]
         self.frontmatter["authors"] = fields["author"].split(" and ")
         self.frontmatter["year"] = fields["year"]
-        # 'month' to 'published'
+        # Create 'published' from 'year' and 'month'.
         month = fields.get("month", "")
         parts = month.split("#")
         if len(parts) == 2 and parts[1]:
@@ -230,15 +355,13 @@ class Item:
         elif len(parts) == 1 and parts[0]:
             month = MONTHS[parts[0].strip().casefold()]
             self.frontmatter["published"] = f'{fields["year"]}-{month:02d}-01'
-        try:
-            self.frontmatter["publisher"] = fields["publisher"]
-        except KeyError:
-            pass
+        else:
+            self.frontmatter["published"] = fields["year"]
         try:
             self.frontmatter["pages"] = fields["pages"].replace("--", "-")
         except KeyError:
             pass
-        for key in ["publisher", "address", "number", "doi"]:
+        for key in ["number", "doi", "publisher", "address"]:
             try:
                 self.frontmatter[key] = fields[key]
             except KeyError:
@@ -246,51 +369,124 @@ class Item:
         self.text = fields.get("abstract", "")
 
     def view(self):
-        header(
-            self.reference,
-            color=self.COLOR,
-            edit=f"/edit/{self.identifier}",
-            delete=f"/delete/{self.identifier}",
-        )
-        ui.label(self.title).classes("text-h5")
-        with ui.row():
-            for author in self.authors:
-                ui.label(author)
+        with ui.header().classes(f"text-h5"):
+            ui.button(icon="home", on_click=lambda: ui.navigate.to("/"))
+            ui.label(self.reference)
+        with ui.grid(columns="auto auto"):
+            ui.button(icon="content_copy").on(
+                "click",
+                js_handler=f"""
+    () => navigator.clipboard.writeText("{self.reference}")
+""",
+            )
+            ui.label(self.title).classes("text-h5")
+            ui.label(self.year).classes("text-bold")
+            with ui.row():
+                for author in self.authors:
+                    ui.label(author)
+            ui.label("Tags:").classes("text-italic")
+            with ui.row():
+                for tag in self.tags:
+                    ui.link(tag, f"/tag/{normalize(tag)}")
+            self.view_additional()
+            ui.label("Published:").classes("text-italic")
+            with ui.row():
+                if self.published:
+                    ui.label(self.published)
+                if self.publisher:
+                    ui.label(self.publisher)
+                if self.address:
+                    ui.label(self.address)
+        ui.markdown(self.text).classes("w-200")
+        with ui.row(align_items="baseline"):
+            ui.button("Edit", on_click=lambda: ui.navigate.to(self.edit_url))
+            ui.label(self.modified)
+            ui.button("Delete", on_click=lambda: ui.navigate.to(self.delete_url)).props(
+                "color=negative"
+            )
+
+    def view_additional(self):
+        pass
 
     def edit(self):
-        if self.reference:
-            header(f"Edit {self.type}", color=self.COLOR)
-        else:
-            header(f"Add {self.type}", color=self.COLOR)
-        self.reference_field = ui.input("Reference", value=self.reference)
-        self.title_field = ui.input("Title", value=self.title).classes("w-200")
+        with ui.header().classes(f"text-h5"):
+            ui.button(icon="home", on_click=lambda: ui.navigate.to("/"))
+            if self.reference:
+                ui.label(f"Edit {self.type}")
+            else:
+                ui.label(f"Add {self.type}")
+        self.reference_field = ui.input(label="Reference", value=self.reference)
+        self.title_field = ui.input(label="Title", value=self.title).classes("w-200")
         self.authors_field = ui.textarea(
-            "Authors", value="\n".join(self.authors)
+            label="Authors", value="\n".join(self.authors)
         ).classes("w-64")
-        self.published_field = ui.date_input("Published", value=self.published)
+        self.tags_field = (
+            ui.select(library.tags, label="Tags", multiple=True, value=self.tags)
+            .classes("w-100")
+            .props("use-chips")
+        )
+        with ui.row():
+            with ui.column():
+                self.year_field = ui.input(label="Year", value=self.year)
+                self.published_field = ui.date_input(
+                    label="Published", value=self.published
+                )
+                self.publisher_field = ui.input(label="Publisher", value=self.publisher)
+                self.address_field = ui.input(label="Address", value=self.address)
+            with ui.column():
+                self.edit_more()
+            with ui.column():
+                self.text_field = ui.textarea("Text", value=self.text).classes("w-200")
         if self.reference:
-            ui.button("Save", on_click=self.save)
-            ui.button("Cancel", on_click=lambda: ui.navigate.to(self.url)).classes(
-                "!bg-gray-500"
-            )
+            with ui.row():
+                ui.button("Save", on_click=self.save)
+                ui.button(
+                    "Cancel", on_click=lambda: ui.navigate.to(self.view_url)
+                ).props("color=dark")
         else:
             ui.button("Add", on_click=self.save)
+
+    def edit_more(self):
+        pass
 
     def save(self):
         try:
             self.reference = self.reference_field.value
             self.frontmatter["title"] = self.title_field.value.strip() or "no title"
             self.frontmatter["authors"] = self.authors_field.value.split("\n")
-            published = self.published_field.value
-            self.frontmatter["published"] = published
-            self.frontmatter["year"] = published.split("-")[0]
+            self.frontmatter["tags"] = self.tags_field.value
+            year = self.year_field.value.strip()
+            if not year:
+                raise ValueError("missing 'year' value")
+            self.frontmatter["year"] = year
+            published = self.published_field.value.strip()
+            if published:
+                if len(published.split("-")) == 2:
+                    self.frontmatter["published"] = published + "-01"
+                else:
+                    self.frontmatter["published"] = published
+            else:
+                self.frontmatter.pop("published", None)
+            if publisher := self.publisher_field.value:
+                self.frontmatter["publisher"] = publisher
+            else:
+                self.frontmatter.pop("publisher", None)
+            if address := self.address_field.value:
+                self.frontmatter["address"] = address
+            else:
+                self.frontmatter.pop("address", None)
+            self.text = self.text_field.value
+            self.save_more()
         except (ValueError, TypeError, IndexError) as error:
             ui.button(
                 f"Error: {error}", type="negative", position="center", close_button="OK"
             )
             return
         self.write()
-        ui.navigate.to(self.url)
+        ui.navigate.to(self.view_url)
+
+    def save_more(self):
+        pass
 
     def write(self):
         with self.filepath.open(mode="w", encoding="utf-8") as outfile:
@@ -301,14 +497,18 @@ class Item:
                 outfile.write(self.text)
 
     def confirm_delete(self):
-        header(f"Delete {self.reference} ?", color="red")
-        ui.label("Really delete this item?").classes("text-h4")
-        ui.button("Yes", on_click=self.delete).props("color=negative")
-        ui.button("Cancel", on_click=lambda: ui.navigate.to(self.url)).classes(
-            "!bg-gray-500"
-        )
+        with ui.header().classes(f"text-h5"):
+            ui.button(icon="home", on_click=lambda: ui.navigate.to("/"))
+            ui.label("Delete item?")
+        ui.label(f"Really delete {self.reference} ?").classes("text-h4")
+        with ui.row():
+            ui.button("Yes", on_click=self.delete).props("color=negative")
+            ui.button("Cancel", on_click=lambda: ui.navigate.to(self.view_url)).props(
+                "color=dark"
+            )
 
     def delete(self):
+        global library
         library.items.pop(self.identifier)
         self.filepath.rename(library.trash_dir / self.filename)
         ui.navigate.to("/")
@@ -316,19 +516,25 @@ class Item:
 
 class Article(Item):
 
-    COLOR = "blue"
-
     @property
     def journal(self):
         return self.frontmatter.get("journal") or ""
+
+    @property
+    def issn(self):
+        return [i.strip() for i in (self.frontmatter.get("issn") or "").split(",")]
 
     @property
     def volume(self):
         return self.frontmatter.get("volume") or ""
 
     @property
-    def issue(self):
-        return self.frontmatter.get("issue") or ""
+    def pmid(self):
+        return self.frontmatter.get("pmid") or ""
+
+    @property
+    def pmc(self):
+        return self.frontmatter.get("pmc") or ""
 
     def from_bibtex(self, fields):
         super().from_bibtex(fields)
@@ -338,38 +544,59 @@ class Article(Item):
             except KeyError:
                 pass
 
-    def view(self):
-        super().view()
+    def view_additional(self):
+        ui.label("Journal:").classes("text-italic")
         with ui.row():
             ui.label(self.journal or "-")
+            for issn in self.issn:
+                ui.link(
+                    f"ISSN {issn}",
+                    f"https://portal.issn.org/resource/ISSN/{issn}",
+                    new_tab=True,
+                )
             ui.label(self.volume or "-").classes("text-weight-bold")
-            if self.issue:
-                ui.label(f"({self.issue})")
+            if self.number:
+                ui.label(f"({self.number})")
             ui.label(self.pages or "-")
-            ui.label(self.published)
+        ui.label("Links:").classes("text-italic")
         with ui.row():
             if self.doi:
-                ui.link(self.doi, f"https://doi.org/{self.doi}", new_tab=True)
+                ui.link(f"DOI {self.doi}", f"https://doi.org/{self.doi}", new_tab=True)
             if self.pmid:
                 ui.link(
                     f"PubMed {self.pmid}",
                     f"https://pubmed.ncbi.nlm.nih.gov/{self.pmid}/",
                     new_tab=True,
                 )
-        ui.markdown(self.text).classes("w-200")
+            if self.pmc:
+                ui.link(
+                    self.pmc,
+                    f"https://pmc.ncbi.nlm.nih.gov/articles/{self.pmc}/",
+                    new_tab=True,
+                )
+
+    def edit_more(self):
+        self.journal_field = ui.input(label="Journal", value=self.journal)
+        self.issn_field = ui.input(label="ISSN", value=self.issn)
+        self.volume_field = ui.input(label="Volume", value=self.volume)
+        self.number_field = ui.input(label="Number", value=self.number)
+        self.doi_field = ui.input(label="DOI", value=self.doi)
+        self.pmid_field = ui.input(label="PubMed", value=self.pmid)
+        self.pmc_field = ui.input(label="PMC", value=self.pmc)
+
+    def save_more(self):
+        pass
 
 
 class Book(Item):
 
-    COLOR = "purple"
-
-    @property
-    def publisher(self):
-        return self.frontmatter.get("publisher") or ""
-
     @property
     def isbn(self):
         return self.frontmatter.get("isbn") or ""
+
+    @property
+    def series(self):
+        return self.frontmatter.get("series") or ""
 
     def from_bibtex(self, fields):
         super().from_bibtex(fields)
@@ -379,11 +606,14 @@ class Book(Item):
             except KeyError:
                 pass
 
-    def view(self):
-        super().view()
+    def view_additional(self):
+        ui.label("Series:").classes("text-italic")
         with ui.row():
-            ui.label(self.publisher or "-")
-            ui.label(self.published)
+            if self.series:
+                ui.label(self.series)
+            if self.number:
+                ui.label(self.number)
+        ui.label("Links:").classes("text-italic")
         with ui.row():
             if self.doi:
                 ui.link(f"DOI {self.doi}", f"https://doi.org/{self.doi}", new_tab=True)
@@ -393,11 +623,40 @@ class Book(Item):
                     f"https://isbnsearch.org/isbn/{self.isbn}",
                     new_tab=True,
                 )
-        ui.markdown(self.text).classes("w-200")
+
+    def edit_more(self):
+        self.series_field = ui.input(label="Series", value=self.series)
+        self.number_field = ui.input(label="Number", value=self.number)
+        self.doi_field = ui.input(label="DOI", value=self.doi)
+        self.isbn_field = ui.input(label="ISBN", value=self.isbn)
+
+    def save_more(self):
+        pass
 
 
 library = Library()
 library.read()
+
+
+@ui.page("/")
+def main():
+    global library
+    with ui.header().classes(f"text-h5"):
+        ui.button(icon="home")
+        ui.label(f"Library v{__version__}")
+        ui.button(
+            "Add BibTex", color="secondary", on_click=lambda: ui.navigate.to("/bibtex")
+        )
+        ui.button(
+            "Add article",
+            color="secondary",
+            on_click=lambda: ui.navigate.to("/article"),
+        )
+        ui.button(
+            "Add book", color="secondary", on_click=lambda: ui.navigate.to("/book")
+        )
+        ui.button("Tags", color="secondary", on_click=lambda: ui.navigate.to("/tags"))
+    library.table_setup()
 
 
 @ui.page("/view/{identifier}")
@@ -424,17 +683,13 @@ def delete_item_page(identifier: str):
 @ui.page("/bibtex")
 def add_bibtex():
     global library
-    header(f"Add bibtex", color="yellow")
+    with ui.header().classes(f"text-h5"):
+        ui.button(icon="home", on_click=lambda: ui.navigate.to("/"))
+        ui.label(f"Add bibtex")
     textarea = ui.textarea(label="BibTex source").classes("w-100")
-
-    def show_items(items):
-        items_table(items)
-        textarea.value = ""
-
-    ui.button(
-        "Parse", on_click=lambda: show_items(library.parse_bibtex(textarea.value))
-    )
-    ui.button("Cancel", on_click=lambda: ui.navigate.to("/").classes("!bg-gray-500"))
+    with ui.row():
+        ui.button("Parse", on_click=lambda: library.parse_bibtex_notify(textarea.value))
+        ui.button("Cancel", on_click=lambda: ui.navigate.to("/").props("color=dark"))
 
 
 @ui.page("/article")
@@ -447,11 +702,75 @@ def add_book_page():
     Book().edit()
 
 
-@ui.page("/")
-def main():
+@ui.page("/tags")
+def tags_page():
     global library
-    header(f"Library v{__version__}")
-    items_table(library())
+
+    def add_tag(tag):
+        library.add_tag(tag)
+        library.write_tags()
+        ui.navigate.to("/tags")
+
+    with ui.header().classes(f"text-h5"):
+        ui.button(icon="home", on_click=lambda: ui.navigate.to("/"))
+        ui.label("Tags")
+    ui.table(
+        columns=[
+            dict(name="tag", label="Tag", field="tag", align="left"),
+            dict(name="number", label="# items", field="number", align="right"),
+        ],
+        rows=[
+            dict(
+                tag=t, number=library.count_tagged_items(t), url=f"/tag/{normalize(t)}"
+            )
+            for t in library.tags
+        ],
+        row_key="name",
+    ).props("bordered").on("row-click", lambda e: ui.navigate.to(e.args[1]["url"]))
+    with ui.row(align_items="baseline"):
+        tag_field = ui.input(label="New tag")
+        ui.button("Add", on_click=lambda: add_tag(tag_field.value))
+
+
+@ui.page("/tag/{tag}")
+def tag_page(tag: str):
+    global library
+    tag = library.get_tag(normalize(tag))
+    if tag is None:
+        ui.notify("Error: no such tag", position="top", type="negative")
+        ui.navigate.to("/tags")
+    else:
+        with ui.header().classes(f"text-h5"):
+            ui.button(icon="home", on_click=lambda: ui.navigate.to("/"))
+            ui.label(f"Tag '{tag}'")
+        library.table_setup(tags=[tag])
+        with ui.row():
+            ui.button(
+                "Delete", on_click=lambda: ui.navigate.to(f"/tag/{tag}/delete")
+            ).props("color=negative")
+            ui.button("Cancel", on_click=lambda: ui.navigate.to("/tags")).props(
+                "color=dark"
+            )
+
+
+@ui.page("/tag/{tag}/delete")
+def tag_delete_page(tag: str):
+    global library
+
+    def do_delete():
+        library.tags.pop(tag, None)
+        library.write_tags()
+        ui.navigate.to("/tags")
+
+    with ui.header().classes(f"text-h5"):
+        ui.button(icon="home", on_click=lambda: ui.navigate.to("/"))
+        ui.label("Delete tag?")
+    ui.label(f"Really delete '{library.tags[tag]}' ?").classes("text-h4")
+    with ui.row():
+        ui.button("Yes", on_click=do_delete).props("color=negative")
+        ui.button("Cancel", on_click=lambda: ui.navigate.to(f"/tag/{tag}")).props(
+            "color=dark"
+        )
 
 
 ui.run(title="Library")
