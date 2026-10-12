@@ -226,7 +226,13 @@ class Library:
                     align="left",
                     style="text-wrap: wrap",
                 ),
-                dict(name="tags", label="Tags", field="tags", align="left"),
+                dict(
+                    name="tags",
+                    label="Tags",
+                    field="tags",
+                    align="left",
+                    style="text-wrap: wrap",
+                ),
                 dict(name="year", label="Year", field="year", align="left"),
             ],
             rows=[
@@ -460,7 +466,8 @@ class Item:
 
     def view(self):
         with ui.header().classes(f"text-h5"):
-            ui.button(icon="home", on_click=lambda: ui.navigate.to("/"))
+            ui.label("📚")
+            ui.button(icon="list", on_click=lambda: ui.navigate.to("/"))
             ui.label(self.reference)
             ui.button(icon="content_copy").on(
                 "click",
@@ -500,7 +507,8 @@ class Item:
 
     def edit(self):
         with ui.header().classes(f"text-h5"):
-            ui.button(icon="home", on_click=lambda: ui.navigate.to("/"))
+            ui.label("📚")
+            ui.button(icon="list", on_click=lambda: ui.navigate.to("/"))
             if self.reference:
                 ui.label(f"Edit {self.type}")
             else:
@@ -578,7 +586,8 @@ class Item:
 
     def confirm_delete(self):
         with ui.header().classes(f"text-h5"):
-            ui.button(icon="home", on_click=lambda: ui.navigate.to("/"))
+            ui.label("📚")
+            ui.button(icon="list", on_click=lambda: ui.navigate.to("/"))
             ui.label("Delete item?")
         ui.label(f"Really delete {self.reference} ?").classes("text-h4")
         with ui.row():
@@ -779,7 +788,7 @@ library.read()
 def main():
     global library
     with ui.header().classes(f"text-h5"):
-        ui.button(icon="home")
+        ui.label("📚")
         ui.label(f"Library v{__version__}")
         ui.button(
             "Add BibTex", color="secondary", on_click=lambda: ui.navigate.to("/bibtex")
@@ -821,7 +830,8 @@ def delete_item_page(identifier: str):
 def add_bibtex():
     global library
     with ui.header().classes(f"text-h5"):
-        ui.button(icon="home", on_click=lambda: ui.navigate.to("/"))
+        ui.label("📚")
+        ui.button(icon="list", on_click=lambda: ui.navigate.to("/"))
         ui.label(f"Add bibtex")
     textarea = ui.textarea(label="BibTex source").classes("w-100")
     with ui.row():
@@ -849,7 +859,8 @@ def tags_page():
         ui.navigate.to("/tags")
 
     with ui.header().classes(f"text-h5"):
-        ui.button(icon="home", on_click=lambda: ui.navigate.to("/"))
+        ui.label("📚")
+        ui.button(icon="list", on_click=lambda: ui.navigate.to("/"))
         ui.label("Tags")
     ui.table(
         columns=[
@@ -877,7 +888,8 @@ def tag_page(tag: str):
         ui.navigate.to("/tags")
     else:
         with ui.header().classes(f"text-h5"):
-            ui.button(icon="home", on_click=lambda: ui.navigate.to("/"))
+            ui.label("📚")
+            ui.button(icon="list", on_click=lambda: ui.navigate.to("/"))
             ui.label(f"Tag '{tag}'")
         library.table_setup(tags=[tag])
         with ui.row():
@@ -898,7 +910,8 @@ def tag_delete_page(tag: str):
         ui.navigate.to("/tags")
 
     with ui.header().classes(f"text-h5"):
-        ui.button(icon="home", on_click=lambda: ui.navigate.to("/"))
+        ui.label("📚")
+        ui.button(icon="list", on_click=lambda: ui.navigate.to("/"))
         ui.label("Delete tag?")
     ui.label(f"Really delete '{tag}' ?").classes("text-h4")
     with ui.row():
@@ -908,4 +921,4 @@ def tag_delete_page(tag: str):
         )
 
 
-ui.run(title="Library")
+ui.run(title="Library", favicon="📚")
