@@ -1,6 +1,6 @@
 "NiceGUI-based interface to library data."
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 import calendar
 import datetime
@@ -103,9 +103,11 @@ class Library:
     def parse_bibtex(self, text):
         """Parse the items in the BibTex source text.
         Add to the library.
-        Return the items in a list."
+        If single item, redirect to its page.
+        If multiple items, redirect to the home page, where the most recent
+        items will be shown.
         """
-        result = []
+        items = []
         for entry in bibtexparser.parse_string(text).entries:
             match entry.entry_type:
                 case "article":
@@ -119,26 +121,18 @@ class Library:
             base_reference = f"{item.authors[0].split(',')[0].strip()} {item.year}"
             reference = base_reference
             letters = list(string.ascii_lowercase)
+            # Until reference is unique.
             while reference in self:
                 reference = base_reference + letters.pop(0)
             item.reference = reference
             item.write()
-            result.append(item)
-        return result
-
-    def parse_bibtex_notify(self, text):
-        """Parse the items in the BibTex source text.
-        Add to the library.
-        Notify about the result.
-        Redirect to the home page, where the most recent items will be shown.
-        """
-        try:
-            items = self.parse_bibtex(text)
-        except ValueError as error:
-            ui.notify(str(error), type="negative")
+            items.append(item)
+        if len(items) == 1:
+            ui.navigate.to(items[0].view_url)
+        elif items:
+            ui.navigate.to("/")
         else:
-            ui.notify(f"{len(items)} items parsed", type="positive")
-        ui.navigate.to("/")
+            ui.notify("No items found", type="warning", position="center")
 
     def table_setup(self, title="", author="", year="", tags=None, text=""):
         with ui.row(align_items="baseline"):
@@ -213,6 +207,7 @@ class Library:
                     align="left",
                     style="text-wrap: wrap",
                 ),
+                dict(name="tags", label="Tags", field="tags", align="left"),
                 dict(name="year", label="Year", field="year", align="left"),
             ],
             rows=[
@@ -221,6 +216,7 @@ class Library:
                     title=i.title,
                     authors="; ".join(i.authors_short),
                     year=i.year,
+                    tags=", ".join(i.tags),
                     url=i.view_url,
                 )
                 for i in items
@@ -342,6 +338,7 @@ class Item:
 
     def from_bibtex(self, fields):
         assert not self.reference
+        # The first three slots are required.
         self.frontmatter["title"] = fields["title"]
         self.frontmatter["authors"] = fields["author"].split(" and ")
         self.frontmatter["year"] = fields["year"]
@@ -372,14 +369,14 @@ class Item:
         with ui.header().classes(f"text-h5"):
             ui.button(icon="home", on_click=lambda: ui.navigate.to("/"))
             ui.label(self.reference)
-        with ui.grid(columns="auto auto"):
             ui.button(icon="content_copy").on(
                 "click",
                 js_handler=f"""
     () => navigator.clipboard.writeText("{self.reference}")
 """,
             )
-            ui.label(self.title).classes("text-h5")
+        ui.label(self.title).classes("text-h5")
+        with ui.grid(columns="auto auto"):
             ui.label(self.year).classes("text-bold")
             with ui.row():
                 for author in self.authors:
@@ -489,6 +486,8 @@ class Item:
         pass
 
     def write(self):
+        if self.filepath.exists():
+            self.filepath.rename(library.trash_dir / self.filename)
         with self.filepath.open(mode="w", encoding="utf-8") as outfile:
             outfile.write("---\n")
             outfile.write(yaml.safe_dump(self.frontmatter, allow_unicode=True))
@@ -655,7 +654,7 @@ def main():
         ui.button(
             "Add book", color="secondary", on_click=lambda: ui.navigate.to("/book")
         )
-        ui.button("Tags", color="secondary", on_click=lambda: ui.navigate.to("/tags"))
+        ui.button("Tags", color="info", on_click=lambda: ui.navigate.to("/tags"))
     library.table_setup()
 
 
@@ -688,7 +687,7 @@ def add_bibtex():
         ui.label(f"Add bibtex")
     textarea = ui.textarea(label="BibTex source").classes("w-100")
     with ui.row():
-        ui.button("Parse", on_click=lambda: library.parse_bibtex_notify(textarea.value))
+        ui.button("Parse", on_click=lambda: library.parse_bibtex(textarea.value))
         ui.button("Cancel", on_click=lambda: ui.navigate.to("/").props("color=dark"))
 
 
@@ -737,7 +736,6 @@ def tag_page(tag: str):
     global library
     tag = library.get_tag(normalize(tag))
     if tag is None:
-        ui.notify("Error: no such tag", position="top", type="negative")
         ui.navigate.to("/tags")
     else:
         with ui.header().classes(f"text-h5"):

@@ -1,3 +1,4 @@
 # library
 
-References to articles and books in Markdown, with a NiceGUI-based interface.
+NiceGUI-based interface for adding, editing and searching references to articles
+and books. Data is stored in Markdown with YAML frontmatter.
