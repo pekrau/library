@@ -1,6 +1,6 @@
 "NiceGUI-based interface to library data."
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 import calendar
 import datetime
@@ -78,12 +78,27 @@ class Library:
             self.items[item.identifier] = item
         if self.configfilepath.exists():
             config = yaml.safe_load(self.configfilepath.read_text())
-            self.tags = sorted(config.get("tags", []), key=lambda t: t.casefold())
+            self.tags = config.get("tags", [])
 
     def add_tag(self, tag):
         tags = set(self.tags)
         tags.add(tag)
         self.tags = sorted(tags, key=lambda t: t.casefold())
+
+    def delete_tag(self, tag):
+        try:
+            self.tags.remove(tag)
+        except ValueError:
+            return
+        self.write_tags()
+        # Delete the tag from all items.
+        for item in self.items.values():
+            try:
+                item.frontmatter.get("tags", []).remove(tag)
+            except ValueError:
+                pass
+            else:
+                item.write()
 
     def write_tags(self):
         with self.configfilepath.open(mode="w", encoding="utf-8") as outfile:
@@ -118,7 +133,11 @@ class Library:
                     raise ValueError(f"cannot handle BibTex type '{entry.entry_type}'")
             item.from_bibtex(dict([(f.key, f.value) for f in entry.fields]))
             # Set the reference, which adds it to the library.
-            base_reference = f"{item.authors[0].split(',')[0].strip()} {item.year}"
+            if item.authors:
+                author = item.authors[0]
+            else:
+                author = "Anonymous"
+            base_reference = f"{author.split(',')[0].strip()} {item.year}"
             reference = base_reference
             letters = list(string.ascii_lowercase)
             # Until reference is unique.
@@ -233,7 +252,7 @@ class Library:
 class Item:
 
     def __init__(self, frontmatter=None, text=None):
-        self.frontmatter = frontmatter or {"type": self.type, "authors": []}
+        self.frontmatter = frontmatter or {"type": self.type}
         self.text = text or ""
 
     @property
@@ -281,9 +300,31 @@ class Item:
     def title(self):
         return self.frontmatter.get("title", "")
 
+    @title.setter
+    def title(self, value):
+        self.set_key_value("title", value)
+
+    def set_key_value(self, key, value):
+        if value := value.strip():
+            self.frontmatter[key] = value
+        else:
+            self.frontmatter.pop(key, None)
+
     @property
     def authors(self):
         return self.frontmatter.get("authors", [])
+
+    @authors.setter
+    def authors(self, value):
+        if isinstance(value, str):
+            value = value.split("\n")
+        elif not isinstance(value, list):
+            raise ValueError
+        value = [v.strip() for v in value]
+        if value := [v for v in value if v]:
+            self.frontmatter["authors"] = value
+        else:
+            self.frontmatter.pop("authors", None)
 
     @property
     def authors_short(self):
@@ -293,36 +334,88 @@ class Item:
         return authors
 
     @property
-    def tags(self):
-        return sorted(self.frontmatter.get("tags") or [], key=lambda t: t.casefold())
-
-    @property
     def year(self):
         return self.frontmatter.get("year", "")
+
+    @year.setter
+    def year(self, value):
+        value = value.strip()
+        if not value:
+            raise ValueError("no value given for 'year'")
+        self.frontmatter["year"] = value
+
+    @property
+    def tags(self):
+        return self.frontmatter.get("tags", [])
+
+    @tags.setter
+    def tags(self, value):
+        if value:
+            if isinstance(value, str):
+                value = [v.strip() for v in value.split(",")]
+            if not isinstance(value, list):
+                raise ValueError
+            value = [v for v in value if v]
+        if value:
+            self.frontmatter["tags"] = sorted(value, key=lambda t: t.casefold())
+        else:
+            self.frontmatter.pop("tags", None)
 
     @property
     def published(self):
         return self.frontmatter.get("published", "")
 
+    @published.setter
+    def published(self, value):
+        self.set_key_value("published", value)
+
     @property
     def number(self):
         return self.frontmatter.get("number") or ""
+
+    @number.setter
+    def number(self, value):
+        self.set_key_value("number", value)
 
     @property
     def pages(self):
         return self.frontmatter.get("pages") or ""
 
+    @pages.setter
+    def pages(self, value):
+        self.set_key_value("pages", value)
+
     @property
     def doi(self):
         return self.frontmatter.get("doi") or ""
+
+    @doi.setter
+    def doi(self, value):
+        self.set_key_value("doi", value)
+
+    @property
+    def paperpile(self):
+        return self.frontmatter.get("paperpile") or ""
+
+    @paperpile.setter
+    def paperpile(self, value):
+        self.set_key_value("paperpile", value)
 
     @property
     def publisher(self):
         return self.frontmatter.get("publisher") or ""
 
+    @publisher.setter
+    def publisher(self, value):
+        self.set_key_value("publisher", value)
+
     @property
     def address(self):
         return self.frontmatter.get("address") or ""
+
+    @address.setter
+    def address(self, value):
+        self.set_key_value("address", value)
 
     @property
     def view_url(self):
@@ -339,9 +432,9 @@ class Item:
     def from_bibtex(self, fields):
         assert not self.reference
         # The first three slots are required.
-        self.frontmatter["title"] = fields["title"]
-        self.frontmatter["authors"] = fields["author"].split(" and ")
-        self.frontmatter["year"] = fields["year"]
+        self.title = fields["title"]
+        self.authors = fields["author"].split(" and ")  # Must be split thus here.
+        self.year = fields["year"]
         # Create 'published' from 'year' and 'month'.
         month = fields.get("month", "")
         parts = month.split("#")
@@ -351,16 +444,16 @@ class Item:
             self.frontmatter["published"] = f'{fields["year"]}-{month:02d}-{day:02d}'
         elif len(parts) == 1 and parts[0]:
             month = MONTHS[parts[0].strip().casefold()]
-            self.frontmatter["published"] = f'{fields["year"]}-{month:02d}-01'
+            self.published = f'{fields["year"]}-{month:02d}-01'
         else:
-            self.frontmatter["published"] = fields["year"]
+            self.published = fields["year"]
         try:
-            self.frontmatter["pages"] = fields["pages"].replace("--", "-")
+            self.pages = fields["pages"].replace("--", "-")
         except KeyError:
             pass
         for key in ["number", "doi", "publisher", "address"]:
             try:
-                self.frontmatter[key] = fields[key]
+                self.set_key_value(key, fields[key])
             except KeyError:
                 pass
         self.text = fields.get("abstract", "")
@@ -394,13 +487,13 @@ class Item:
                     ui.label(self.publisher)
                 if self.address:
                     ui.label(self.address)
-        ui.markdown(self.text).classes("w-200")
         with ui.row(align_items="baseline"):
             ui.button("Edit", on_click=lambda: ui.navigate.to(self.edit_url))
             ui.label(self.modified)
             ui.button("Delete", on_click=lambda: ui.navigate.to(self.delete_url)).props(
                 "color=negative"
             )
+        ui.markdown(self.text).classes("w-200")
 
     def view_additional(self):
         pass
@@ -431,7 +524,7 @@ class Item:
                 self.publisher_field = ui.input(label="Publisher", value=self.publisher)
                 self.address_field = ui.input(label="Address", value=self.address)
             with ui.column():
-                self.edit_more()
+                self.edit_additional()
             with ui.column():
                 self.text_field = ui.textarea("Text", value=self.text).classes("w-200")
         if self.reference:
@@ -443,37 +536,25 @@ class Item:
         else:
             ui.button("Add", on_click=self.save)
 
-    def edit_more(self):
+    def edit_additional(self):
         pass
 
     def save(self):
         try:
             self.reference = self.reference_field.value
-            self.frontmatter["title"] = self.title_field.value.strip() or "no title"
-            self.frontmatter["authors"] = self.authors_field.value.split("\n")
-            self.frontmatter["tags"] = self.tags_field.value
-            year = self.year_field.value.strip()
-            if not year:
-                raise ValueError("missing 'year' value")
-            self.frontmatter["year"] = year
+            self.title = self.title_field.value
+            self.authors = self.authors_field.value
+            self.year = self.year_field.value
+            self.tags = self.tags_field.value
             published = self.published_field.value.strip()
-            if published:
-                if len(published.split("-")) == 2:
-                    self.frontmatter["published"] = published + "-01"
-                else:
-                    self.frontmatter["published"] = published
+            if len(published.split("-")) == 2:  # Only year and month given.
+                self.published = published + "-01"
             else:
-                self.frontmatter.pop("published", None)
-            if publisher := self.publisher_field.value:
-                self.frontmatter["publisher"] = publisher
-            else:
-                self.frontmatter.pop("publisher", None)
-            if address := self.address_field.value:
-                self.frontmatter["address"] = address
-            else:
-                self.frontmatter.pop("address", None)
+                self.published = published
+            self.publisher = self.publisher_field.value
+            self.address = self.address_field.value
             self.text = self.text_field.value
-            self.save_more()
+            self.save_additional()
         except (ValueError, TypeError, IndexError) as error:
             ui.button(
                 f"Error: {error}", type="negative", position="center", close_button="OK"
@@ -482,7 +563,7 @@ class Item:
         self.write()
         ui.navigate.to(self.view_url)
 
-    def save_more(self):
+    def save_additional(self):
         pass
 
     def write(self):
@@ -519,29 +600,60 @@ class Article(Item):
     def journal(self):
         return self.frontmatter.get("journal") or ""
 
+    @journal.setter
+    def journal(self, value):
+        self.set_key_value("journal", value)
+
     @property
     def issn(self):
-        return [i.strip() for i in (self.frontmatter.get("issn") or "").split(",")]
+        return self.frontmatter.get("issn", [])
+
+    @issn.setter
+    def issn(self, value):
+        if value:
+            if isinstance(value, str):
+                value = value.split(",")
+            if not isinstance(value, list):
+                raise ValueError
+            value = [v.strip() for v in value]
+            value = [v for v in value if v]
+        if value:
+            self.frontmatter["issn"] = value
+        else:
+            self.frontmatter.pop("issn", None)
 
     @property
     def volume(self):
         return self.frontmatter.get("volume") or ""
 
+    @volume.setter
+    def volume(self, value):
+        self.set_key_value("volume", value)
+
     @property
     def pmid(self):
         return self.frontmatter.get("pmid") or ""
+
+    @pmid.setter
+    def pmid(self, value):
+        self.set_key_value("pmid", value)
 
     @property
     def pmc(self):
         return self.frontmatter.get("pmc") or ""
 
+    @pmc.setter
+    def pmc(self, value):
+        self.set_key_value("pmc", value)
+
     def from_bibtex(self, fields):
         super().from_bibtex(fields)
-        for key in ["journal", "issn", "volume", "pmid", "pmc"]:
+        for key in ["journal", "volume", "pmid", "pmc"]:
             try:
-                self.frontmatter[key] = fields[key]
+                self.set_key_value(key, fields[key])
             except KeyError:
                 pass
+        self.issn = fields.get("issn")
 
     def view_additional(self):
         ui.label("Journal:").classes("text-italic")
@@ -573,18 +685,28 @@ class Article(Item):
                     f"https://pmc.ncbi.nlm.nih.gov/articles/{self.pmc}/",
                     new_tab=True,
                 )
+            if self.paperpile:
+                ui.link("Paperpile", self.paperpile, new_tab=True)
 
-    def edit_more(self):
+    def edit_additional(self):
         self.journal_field = ui.input(label="Journal", value=self.journal)
-        self.issn_field = ui.input(label="ISSN", value=self.issn)
+        self.issn_field = ui.input(label="ISSN", value=", ".join(self.issn))
         self.volume_field = ui.input(label="Volume", value=self.volume)
         self.number_field = ui.input(label="Number", value=self.number)
         self.doi_field = ui.input(label="DOI", value=self.doi)
         self.pmid_field = ui.input(label="PubMed", value=self.pmid)
         self.pmc_field = ui.input(label="PMC", value=self.pmc)
+        self.paperpile_field = ui.input(label="Paperpile", value=self.paperpile)
 
-    def save_more(self):
-        pass
+    def save_additional(self):
+        self.journal = self.journal_field.value
+        self.issn = self.issn_field.value
+        self.volume = self.volume_field.value
+        self.number = self.number_field.value
+        self.doi = self.doi_field.value
+        self.pmid = self.pmid_field.value
+        self.pmc = self.pmc_field.value
+        self.paperpile = self.paperpile_field.value
 
 
 class Book(Item):
@@ -593,25 +715,34 @@ class Book(Item):
     def isbn(self):
         return self.frontmatter.get("isbn") or ""
 
+    @isbn.setter
+    def isbn(self, value):
+        self.set_key_value("isbn", value)
+
     @property
     def series(self):
         return self.frontmatter.get("series") or ""
+
+    @series.setter
+    def series(self, value):
+        self.set_key_value("series", value)
 
     def from_bibtex(self, fields):
         super().from_bibtex(fields)
         for key in ["series", "isbn"]:
             try:
-                self.frontmatter[key] = fields[key]
+                self.set_key_value(key, fields[key])
             except KeyError:
                 pass
 
     def view_additional(self):
-        ui.label("Series:").classes("text-italic")
-        with ui.row():
-            if self.series:
-                ui.label(self.series)
-            if self.number:
-                ui.label(self.number)
+        if self.series or self.number:
+            ui.label("Series:").classes("text-italic")
+            with ui.row():
+                if self.series:
+                    ui.label(self.series)
+                if self.number:
+                    ui.label(self.number)
         ui.label("Links:").classes("text-italic")
         with ui.row():
             if self.doi:
@@ -622,15 +753,22 @@ class Book(Item):
                     f"https://isbnsearch.org/isbn/{self.isbn}",
                     new_tab=True,
                 )
+            if self.paperpile:
+                ui.link("Paperpile", self.paperpile, new_tab=True)
 
-    def edit_more(self):
+    def edit_additional(self):
         self.series_field = ui.input(label="Series", value=self.series)
         self.number_field = ui.input(label="Number", value=self.number)
         self.doi_field = ui.input(label="DOI", value=self.doi)
         self.isbn_field = ui.input(label="ISBN", value=self.isbn)
+        self.paperpile_field = ui.input(label="Paperpile", value=self.paperpile)
 
-    def save_more(self):
-        pass
+    def save_additional(self):
+        self.series = self.series_field.value
+        self.number = self.number_field.value
+        self.doi = self.doi_field.value
+        self.isbn = self.isbn_field.value
+        self.paperpile = self.paperpile_field.value
 
 
 library = Library()
@@ -756,14 +894,13 @@ def tag_delete_page(tag: str):
     global library
 
     def do_delete():
-        library.tags.pop(tag, None)
-        library.write_tags()
+        library.delete_tag(tag)
         ui.navigate.to("/tags")
 
     with ui.header().classes(f"text-h5"):
         ui.button(icon="home", on_click=lambda: ui.navigate.to("/"))
         ui.label("Delete tag?")
-    ui.label(f"Really delete '{library.tags[tag]}' ?").classes("text-h4")
+    ui.label(f"Really delete '{tag}' ?").classes("text-h4")
     with ui.row():
         ui.button("Yes", on_click=do_delete).props("color=negative")
         ui.button("Cancel", on_click=lambda: ui.navigate.to(f"/tag/{tag}")).props(
