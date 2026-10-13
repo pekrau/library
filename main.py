@@ -1,6 +1,6 @@
 "NiceGUI-based interface to library data."
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"
 
 import calendar
 import datetime
@@ -330,7 +330,7 @@ class Item:
         if value := [v for v in value if v]:
             self.frontmatter["authors"] = value
         else:
-            self.frontmatter.pop("authors", None)
+            self.frontmatter["authors"] = ["Anonymous"]
 
     @property
     def authors_short(self):
@@ -457,7 +457,7 @@ class Item:
             self.pages = fields["pages"].replace("--", "-")
         except KeyError:
             pass
-        for key in ["number", "doi", "publisher", "address"]:
+        for key in ["number", "pages", "doi", "publisher", "address"]:
             try:
                 self.set_key_value(key, fields[key])
             except KeyError:
@@ -466,8 +466,7 @@ class Item:
 
     def view(self):
         with ui.header().classes(f"text-h5"):
-            ui.label("📚")
-            ui.button(icon="list", on_click=lambda: ui.navigate.to("/"))
+            ui.link("📚", "/").style("text-decoration: none;")
             ui.label(self.reference)
             ui.button(icon="content_copy").on(
                 "click",
@@ -507,34 +506,38 @@ class Item:
 
     def edit(self):
         with ui.header().classes(f"text-h5"):
-            ui.label("📚")
-            ui.button(icon="list", on_click=lambda: ui.navigate.to("/"))
+            ui.link("📚", "/").style("text-decoration: none;")
             if self.reference:
-                ui.label(f"Edit {self.type}")
+                ui.label(f"Edit {self.reference}")
             else:
                 ui.label(f"Add {self.type}")
-        self.reference_field = ui.input(label="Reference", value=self.reference)
-        self.title_field = ui.input(label="Title", value=self.title).classes("w-200")
-        self.authors_field = ui.textarea(
-            label="Authors", value="\n".join(self.authors)
-        ).classes("w-64")
-        self.tags_field = (
-            ui.select(library.tags, label="Tags", multiple=True, value=self.tags)
-            .classes("w-100")
-            .props("use-chips")
-        )
+
+        self.title_field = ui.input(label="Title *", value=self.title).classes("w-200")
         with ui.row():
+            self.authors_field = ui.textarea(
+                label="Authors *", value="\n".join(self.authors)
+            ).classes("w-64")
             with ui.column():
-                self.year_field = ui.input(label="Year", value=self.year)
-                self.published_field = ui.date_input(
-                    label="Published", value=self.published
+                with ui.row():
+                    self.year_field = ui.input(label="Year *", value=self.year)
+                    self.published_field = ui.date_input(
+                        label="Published", value=self.published
+                    )
+                    self.reference_field = ui.input(
+                        label="Reference", value=self.reference
+                    )
+                self.tags_field = (
+                    ui.select(
+                        library.tags, label="Tags", multiple=True, value=self.tags
+                    )
+                    .classes("w-140")
+                    .props("use-chips")
                 )
-                self.publisher_field = ui.input(label="Publisher", value=self.publisher)
-                self.address_field = ui.input(label="Address", value=self.address)
-            with ui.column():
-                self.edit_additional()
-            with ui.column():
-                self.text_field = ui.textarea("Text", value=self.text).classes("w-200")
+        with ui.row():
+            self.edit_bibliographic()
+        with ui.row():
+            self.edit_xrefs()
+        self.text_field = ui.textarea("Text", value=self.text).classes("w-200")
         if self.reference:
             with ui.row():
                 ui.button("Save", on_click=self.save)
@@ -544,35 +547,47 @@ class Item:
         else:
             ui.button("Add", on_click=self.save)
 
-    def edit_additional(self):
-        pass
+    def edit_bibliographic(self):
+        self.publisher_field = ui.input(
+            label="Publisher", value=self.publisher
+        ).classes("w-50")
+        self.address_field = ui.input(label="Address", value=self.address)
+
+    def edit_xrefs(self):
+        self.doi_field = ui.input(label="DOI", value=self.doi)
 
     def save(self):
         try:
-            self.reference = self.reference_field.value
             self.title = self.title_field.value
             self.authors = self.authors_field.value
             self.year = self.year_field.value
             self.tags = self.tags_field.value
             published = self.published_field.value.strip()
-            if len(published.split("-")) == 2:  # Only year and month given.
+            if len(published.split("-")) == 2:  # Only year and month given; add day.
                 self.published = published + "-01"
             else:
                 self.published = published
-            self.publisher = self.publisher_field.value
-            self.address = self.address_field.value
+            self.reference = (
+                self.reference_field.value
+                or f"{self.authors[0].split(',')[0]} {self.year}"
+            )
+            self.save_bibliographic()
+            self.save_xrefs()
             self.text = self.text_field.value
-            self.save_additional()
         except (ValueError, TypeError, IndexError) as error:
-            ui.button(
+            ui.notify(
                 f"Error: {error}", type="negative", position="center", close_button="OK"
             )
             return
         self.write()
         ui.navigate.to(self.view_url)
 
-    def save_additional(self):
-        pass
+    def save_bibliographic(self):
+        self.publisher = self.publisher_field.value
+        self.address = self.address_field.value
+
+    def save_xrefs(self):
+        self.doi = self.doi_field.value
 
     def write(self):
         if self.filepath.exists():
@@ -586,8 +601,7 @@ class Item:
 
     def confirm_delete(self):
         with ui.header().classes(f"text-h5"):
-            ui.label("📚")
-            ui.button(icon="list", on_click=lambda: ui.navigate.to("/"))
+            ui.link("📚", "/").style("text-decoration: none;")
             ui.label("Delete item?")
         ui.label(f"Really delete {self.reference} ?").classes("text-h4")
         with ui.row():
@@ -697,22 +711,30 @@ class Article(Item):
             if self.paperpile:
                 ui.link("Paperpile", self.paperpile, new_tab=True)
 
-    def edit_additional(self):
+    def edit_bibliographic(self):
+        super().edit_bibliographic()
         self.journal_field = ui.input(label="Journal", value=self.journal)
         self.issn_field = ui.input(label="ISSN", value=", ".join(self.issn))
-        self.volume_field = ui.input(label="Volume", value=self.volume)
-        self.number_field = ui.input(label="Number", value=self.number)
-        self.doi_field = ui.input(label="DOI", value=self.doi)
+        self.volume_field = ui.input(label="Volume", value=self.volume).classes("w-20")
+        self.number_field = ui.input(label="Number", value=self.number).classes("w-20")
+        self.pages_field = ui.input(label="Pages", value=self.pages)
+
+    def edit_xrefs(self):
+        super().edit_xrefs()
         self.pmid_field = ui.input(label="PubMed", value=self.pmid)
         self.pmc_field = ui.input(label="PMC", value=self.pmc)
         self.paperpile_field = ui.input(label="Paperpile", value=self.paperpile)
 
-    def save_additional(self):
+    def save_bibliographic(self):
+        super().save_bibliographic()
         self.journal = self.journal_field.value
         self.issn = self.issn_field.value
         self.volume = self.volume_field.value
         self.number = self.number_field.value
-        self.doi = self.doi_field.value
+        self.pages = self.pages_field.value
+
+    def save_xrefs(self):
+        super().save_xrefs()
         self.pmid = self.pmid_field.value
         self.pmc = self.pmc_field.value
         self.paperpile = self.paperpile_field.value
@@ -727,6 +749,14 @@ class Book(Item):
     @isbn.setter
     def isbn(self, value):
         self.set_key_value("isbn", value)
+
+    @property
+    def goodreads(self):
+        return self.frontmatter.get("goodreads") or ""
+
+    @goodreads.setter
+    def goodreads(self, value):
+        self.set_key_value("goodreads", value)
 
     @property
     def series(self):
@@ -745,13 +775,14 @@ class Book(Item):
                 pass
 
     def view_additional(self):
-        if self.series or self.number:
-            ui.label("Series:").classes("text-italic")
-            with ui.row():
-                if self.series:
-                    ui.label(self.series)
-                if self.number:
-                    ui.label(self.number)
+        ui.label("Info:").classes("text-italic")
+        with ui.row():
+            if self.series:
+                ui.label(self.series)
+            if self.number:
+                ui.label(self.number)
+            if self.pages:
+                ui.label(f"{self.pages} pp")
         ui.label("Links:").classes("text-italic")
         with ui.row():
             if self.doi:
@@ -762,21 +793,37 @@ class Book(Item):
                     f"https://isbnsearch.org/isbn/{self.isbn}",
                     new_tab=True,
                 )
+            if self.goodreads:
+                ui.link(
+                    "Goodreads",
+                    f"https://www.goodreads.com/book/show/{self.goodreads}",
+                    new_tab=True,
+                )
             if self.paperpile:
                 ui.link("Paperpile", self.paperpile, new_tab=True)
 
-    def edit_additional(self):
+    def edit_bibliographic(self):
+        super().edit_bibliographic()
         self.series_field = ui.input(label="Series", value=self.series)
         self.number_field = ui.input(label="Number", value=self.number)
-        self.doi_field = ui.input(label="DOI", value=self.doi)
+        self.pages_field = ui.input(label="Pages", value=self.pages)
+
+    def edit_xrefs(self):
+        super().edit_xrefs()
         self.isbn_field = ui.input(label="ISBN", value=self.isbn)
+        self.goodreads_field = ui.input(label="Goodreads", value=self.goodreads)
         self.paperpile_field = ui.input(label="Paperpile", value=self.paperpile)
 
-    def save_additional(self):
+    def save_bibliographic(self):
+        super().save_bibliographic()
         self.series = self.series_field.value
         self.number = self.number_field.value
-        self.doi = self.doi_field.value
+        self.pages = self.pages_field.value
+
+    def save_xrefs(self):
+        super().save_xrefs()
         self.isbn = self.isbn_field.value
+        self.goodreads = self.goodreads_field.value
         self.paperpile = self.paperpile_field.value
 
 
@@ -830,8 +877,7 @@ def delete_item_page(identifier: str):
 def add_bibtex():
     global library
     with ui.header().classes(f"text-h5"):
-        ui.label("📚")
-        ui.button(icon="list", on_click=lambda: ui.navigate.to("/"))
+        ui.link("📚", "/").style("text-decoration: none;")
         ui.label(f"Add bibtex")
     textarea = ui.textarea(label="BibTex source").classes("w-100")
     with ui.row():
@@ -859,8 +905,7 @@ def tags_page():
         ui.navigate.to("/tags")
 
     with ui.header().classes(f"text-h5"):
-        ui.label("📚")
-        ui.button(icon="list", on_click=lambda: ui.navigate.to("/"))
+        ui.link("📚", "/").style("text-decoration: none;")
         ui.label("Tags")
     ui.table(
         columns=[
@@ -888,8 +933,7 @@ def tag_page(tag: str):
         ui.navigate.to("/tags")
     else:
         with ui.header().classes(f"text-h5"):
-            ui.label("📚")
-            ui.button(icon="list", on_click=lambda: ui.navigate.to("/"))
+            ui.link("📚", "/").style("text-decoration: none;")
             ui.label(f"Tag '{tag}'")
         library.table_setup(tags=[tag])
         with ui.row():
@@ -910,8 +954,7 @@ def tag_delete_page(tag: str):
         ui.navigate.to("/tags")
 
     with ui.header().classes(f"text-h5"):
-        ui.label("📚")
-        ui.button(icon="list", on_click=lambda: ui.navigate.to("/"))
+        ui.link("📚", "/").style("text-decoration: none;")
         ui.label("Delete tag?")
     ui.label(f"Really delete '{tag}' ?").classes("text-h4")
     with ui.row():
