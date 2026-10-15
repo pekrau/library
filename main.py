@@ -1,9 +1,10 @@
 "NiceGUI-based interface to library data."
 
-__version__ = "0.3.3"
+__version__ = "0.4.0"
 
 import calendar
 import datetime
+import mimetypes
 import os
 import pathlib
 import re
@@ -13,7 +14,9 @@ import unicodedata
 
 import bibtexparser
 import dotenv
-from nicegui import ui
+from fastapi.responses import FileResponse
+from nicegui import ui, app
+import starlette.formparsers
 import yaml
 
 dotenv.load_dotenv()
@@ -34,6 +37,8 @@ MONTHS.update(
     )
 )
 
+
+starlette.formparsers.MultiPartParser.spool_max_size = 1024 * 1024 * 32 # 32 MB
 
 def normalize(s):
     "Normalize string to ASCII, fold case, replace non-file characters with '-'."
@@ -73,6 +78,8 @@ class Library:
                     item = Article(frontmatter, content[m.start(2) :])
                 case "book":
                     item = Book(frontmatter, content[m.start(2) :])
+                case "post":
+                    item = Post(frontmatter, content[m.start(2) :])
                 case _:
                     sys.exit(f"Error: type-less item '{filename}'")
             self.items[item.identifier] = item
@@ -147,7 +154,7 @@ class Library:
             item.write()
             items.append(item)
         if len(items) == 1:
-            ui.navigate.to(items[0].view_url)
+            ui.navigate.to(items[0].url_view)
         elif items:
             ui.navigate.to("/")
         else:
@@ -164,8 +171,8 @@ class Library:
                 .props("use-chips")
             )
             self.text_filter = ui.input(label="Text", value=text)
-            ui.button("Filter", on_click=lambda: self.table_refresh())
-            ui.button("Clear", on_click=lambda: self.table_inputs_clear())
+            ui.button("Filter", on_click=lambda: self.table_refresh()).props("no-caps")
+            ui.button("Clear", on_click=lambda: self.table_inputs_clear()).props("no-caps")
         self.table(title=title, author=author, year=year, tags=tags, text=text)
 
     def table_refresh(self):
@@ -242,7 +249,7 @@ class Library:
                     authors="; ".join(i.authors_short),
                     year=i.year,
                     tags=", ".join(i.tags),
-                    url=i.view_url,
+                    url=i.url_view,
                 )
                 for i in items
             ],
@@ -281,6 +288,13 @@ class Item:
         if self.identifier:
             library.items.pop(self.identifier)
             self.filepath.rename(library.trash_dir / self.filename)
+            # Special case: Post instance may have an uploaded file.
+            try:
+                file = pathlib.Path(library.root_dir / self.frontmatter["file"])
+            except KeyError:
+                pass
+            else:
+                self.file = file.rename(file.with_stem(normalize(new))).name
         self.frontmatter["reference"] = new
         library.items[self.identifier] = self
 
@@ -311,7 +325,7 @@ class Item:
         self.set_key_value("title", value)
 
     def set_key_value(self, key, value):
-        if value := value.strip():
+        if value is not None and (value := value.strip()):
             self.frontmatter[key] = value
         else:
             self.frontmatter.pop(key, None)
@@ -376,38 +390,6 @@ class Item:
         self.set_key_value("published", value)
 
     @property
-    def number(self):
-        return self.frontmatter.get("number") or ""
-
-    @number.setter
-    def number(self, value):
-        self.set_key_value("number", value)
-
-    @property
-    def pages(self):
-        return self.frontmatter.get("pages") or ""
-
-    @pages.setter
-    def pages(self, value):
-        self.set_key_value("pages", value)
-
-    @property
-    def doi(self):
-        return self.frontmatter.get("doi") or ""
-
-    @doi.setter
-    def doi(self, value):
-        self.set_key_value("doi", value)
-
-    @property
-    def paperpile(self):
-        return self.frontmatter.get("paperpile") or ""
-
-    @paperpile.setter
-    def paperpile(self, value):
-        self.set_key_value("paperpile", value)
-
-    @property
     def publisher(self):
         return self.frontmatter.get("publisher") or ""
 
@@ -424,45 +406,16 @@ class Item:
         self.set_key_value("address", value)
 
     @property
-    def view_url(self):
+    def url_view(self):
         return f"/view/{self.identifier}"
 
     @property
-    def edit_url(self):
+    def url_edit(self):
         return f"/edit/{self.identifier}"
 
     @property
-    def delete_url(self):
+    def url_delete(self):
         return f"/delete/{self.identifier}"
-
-    def from_bibtex(self, fields):
-        assert not self.reference
-        # The first three slots are required.
-        self.title = fields["title"]
-        self.authors = fields["author"].split(" and ")  # Must be split thus here.
-        self.year = fields["year"]
-        # Create 'published' from 'year' and 'month'.
-        month = fields.get("month", "")
-        parts = month.split("#")
-        if len(parts) == 2 and parts[1]:
-            month = MONTHS[parts[1].strip().casefold()]
-            day = int("".join([c for c in parts[0] if c in string.digits]))
-            self.frontmatter["published"] = f'{fields["year"]}-{month:02d}-{day:02d}'
-        elif len(parts) == 1 and parts[0]:
-            month = MONTHS[parts[0].strip().casefold()]
-            self.published = f'{fields["year"]}-{month:02d}-01'
-        else:
-            self.published = fields["year"]
-        try:
-            self.pages = fields["pages"].replace("--", "-")
-        except KeyError:
-            pass
-        for key in ["number", "pages", "doi", "publisher", "address"]:
-            try:
-                self.set_key_value(key, fields[key])
-            except KeyError:
-                pass
-        self.text = fields.get("abstract", "")
 
     def view(self):
         with ui.header().classes(f"text-h5"):
@@ -484,24 +437,27 @@ class Item:
             with ui.row():
                 for tag in self.tags:
                     ui.link(tag, f"/tag/{normalize(tag)}")
-            self.view_additional()
             ui.label("Published:").classes("text-italic")
+            ui.label(self.published)
+            ui.label("Bibliographic:").classes("text-italic")
             with ui.row():
-                if self.published:
-                    ui.label(self.published)
-                if self.publisher:
-                    ui.label(self.publisher)
-                if self.address:
-                    ui.label(self.address)
+                self.view_bibliographic()
+            ui.label("Links:").classes("text-italic")
+            with ui.row():
+                self.view_links()
         with ui.row(align_items="baseline"):
-            ui.button("Edit", on_click=lambda: ui.navigate.to(self.edit_url))
+            ui.button("Edit", on_click=lambda: ui.navigate.to(self.url_edit)).props("no-caps")
             ui.label(self.modified)
-            ui.button("Delete", on_click=lambda: ui.navigate.to(self.delete_url)).props(
-                "color=negative"
+            ui.button("Delete", on_click=lambda: ui.navigate.to(self.url_delete)).props(
+                "color=negative no-caps"
             )
         ui.markdown(self.text).classes("w-200")
 
-    def view_additional(self):
+    def view_bibliographic(self):
+        ui.label(self.publisher)
+        ui.label(self.address)
+
+    def view_links(self):
         pass
 
     def edit(self):
@@ -536,16 +492,16 @@ class Item:
         with ui.row():
             self.edit_bibliographic()
         with ui.row():
-            self.edit_xrefs()
+            self.edit_links()
         self.text_field = ui.textarea("Text", value=self.text).classes("w-200")
         if self.reference:
             with ui.row():
-                ui.button("Save", on_click=self.save)
+                ui.button("Save", on_click=self.save).props("no-caps")
                 ui.button(
-                    "Cancel", on_click=lambda: ui.navigate.to(self.view_url)
-                ).props("color=dark")
+                    "Cancel", on_click=lambda: ui.navigate.to(self.url_view)
+                ).props("color=dark no-caps")
         else:
-            ui.button("Add", on_click=self.save)
+            ui.button("Add", on_click=self.save).props("no-caps")
 
     def edit_bibliographic(self):
         self.publisher_field = ui.input(
@@ -553,7 +509,7 @@ class Item:
         ).classes("w-50")
         self.address_field = ui.input(label="Address", value=self.address)
 
-    def edit_xrefs(self):
+    def edit_links(self):
         self.doi_field = ui.input(label="DOI", value=self.doi)
 
     def save(self):
@@ -572,7 +528,7 @@ class Item:
                 or f"{self.authors[0].split(',')[0]} {self.year}"
             )
             self.save_bibliographic()
-            self.save_xrefs()
+            self.save_links()
             self.text = self.text_field.value
         except (ValueError, TypeError, IndexError) as error:
             ui.notify(
@@ -580,13 +536,13 @@ class Item:
             )
             return
         self.write()
-        ui.navigate.to(self.view_url)
+        ui.navigate.to(self.url_view)
 
     def save_bibliographic(self):
         self.publisher = self.publisher_field.value
         self.address = self.address_field.value
 
-    def save_xrefs(self):
+    def save_links(self):
         self.doi = self.doi_field.value
 
     def write(self):
@@ -605,9 +561,9 @@ class Item:
             ui.label("Delete item?")
         ui.label(f"Really delete {self.reference} ?").classes("text-h4")
         with ui.row():
-            ui.button("Yes", on_click=self.delete).props("color=negative")
-            ui.button("Cancel", on_click=lambda: ui.navigate.to(self.view_url)).props(
-                "color=dark"
+            ui.button("Yes", on_click=self.delete).props("color=negative no-caps")
+            ui.button("Cancel", on_click=lambda: ui.navigate.to(self.url_view)).props(
+                "color=dark no-caps"
             )
 
     def delete(self):
@@ -617,7 +573,75 @@ class Item:
         ui.navigate.to("/")
 
 
-class Article(Item):
+class Publication(Item):
+    "Abstract printed publication; Article or Book."
+
+    @property
+    def number(self):
+        return self.frontmatter.get("number") or ""
+
+    @number.setter
+    def number(self, value):
+        self.set_key_value("number", value)
+
+    @property
+    def pages(self):
+        return self.frontmatter.get("pages") or ""
+
+    @pages.setter
+    def pages(self, value):
+        self.set_key_value("pages", value)
+
+    @property
+    def doi(self):
+        return self.frontmatter.get("doi") or ""
+
+    @doi.setter
+    def doi(self, value):
+        self.set_key_value("doi", value)
+
+    @property
+    def paperpile(self):
+        return self.frontmatter.get("paperpile") or ""
+
+    @paperpile.setter
+    def paperpile(self, value):
+        self.set_key_value("paperpile", value)
+
+    def view_links(self):
+        super().view_links()
+        if self.doi:
+            ui.link(f"DOI {self.doi}", f"https://doi.org/{self.doi}", new_tab=True)
+        if self.paperpile:
+            ui.link("Paperpile", self.paperpile, new_tab=True)
+
+    def from_bibtex(self, fields):
+        assert not self.reference
+        # The first three slots are required.
+        self.title = fields["title"]
+        self.authors = fields["author"].split(" and ")  # Must be split thus here.
+        self.year = fields["year"]
+        # Create 'published' from 'year' and 'month'.
+        month = fields.get("month", "")
+        parts = month.split("#")
+        if len(parts) == 2 and parts[1]:
+            month = MONTHS[parts[1].strip().casefold()]
+            day = int("".join([c for c in parts[0] if c in string.digits]))
+            self.frontmatter["published"] = f'{fields["year"]}-{month:02d}-{day:02d}'
+        elif len(parts) == 1 and parts[0]:
+            month = MONTHS[parts[0].strip().casefold()]
+            self.published = f'{fields["year"]}-{month:02d}-01'
+        else:
+            self.published = fields["year"]
+        self.publisher = fields.get("publisher")
+        self.address = fields.get("address")
+        self.number = fields.get("number")
+        self.pages = fields.get("pages", "").replace("--", "-")
+        self.doi = fields.get("doi")
+        self.text = fields.get("abstract", "")
+
+
+class Article(Publication):
 
     @property
     def journal(self):
@@ -669,47 +693,34 @@ class Article(Item):
     def pmc(self, value):
         self.set_key_value("pmc", value)
 
-    def from_bibtex(self, fields):
-        super().from_bibtex(fields)
-        for key in ["journal", "volume", "pmid", "pmc"]:
-            try:
-                self.set_key_value(key, fields[key])
-            except KeyError:
-                pass
-        self.issn = fields.get("issn")
+    def view_bibliographic(self):
+        super().view_bibliographic()
+        ui.label(self.journal or "-")
+        for issn in self.issn:
+            ui.link(
+                f"ISSN {issn}",
+                f"https://portal.issn.org/resource/ISSN/{issn}",
+                new_tab=True,
+            )
+        ui.label(self.volume or "-").classes("text-weight-bold")
+        if self.number:
+            ui.label(f"({self.number})")
+        ui.label(self.pages or "-")
 
-    def view_additional(self):
-        ui.label("Journal:").classes("text-italic")
-        with ui.row():
-            ui.label(self.journal or "-")
-            for issn in self.issn:
-                ui.link(
-                    f"ISSN {issn}",
-                    f"https://portal.issn.org/resource/ISSN/{issn}",
-                    new_tab=True,
-                )
-            ui.label(self.volume or "-").classes("text-weight-bold")
-            if self.number:
-                ui.label(f"({self.number})")
-            ui.label(self.pages or "-")
-        ui.label("Links:").classes("text-italic")
-        with ui.row():
-            if self.doi:
-                ui.link(f"DOI {self.doi}", f"https://doi.org/{self.doi}", new_tab=True)
-            if self.pmid:
-                ui.link(
-                    f"PubMed {self.pmid}",
-                    f"https://pubmed.ncbi.nlm.nih.gov/{self.pmid}/",
-                    new_tab=True,
-                )
-            if self.pmc:
-                ui.link(
-                    self.pmc,
-                    f"https://pmc.ncbi.nlm.nih.gov/articles/{self.pmc}/",
-                    new_tab=True,
-                )
-            if self.paperpile:
-                ui.link("Paperpile", self.paperpile, new_tab=True)
+    def view_links(self):
+        super().view_links()
+        if self.pmid:
+            ui.link(
+                f"PubMed {self.pmid}",
+                f"https://pubmed.ncbi.nlm.nih.gov/{self.pmid}/",
+                new_tab=True,
+            )
+        if self.pmc:
+            ui.link(
+                self.pmc,
+                f"https://pmc.ncbi.nlm.nih.gov/articles/{self.pmc}/",
+                new_tab=True,
+            )
 
     def edit_bibliographic(self):
         super().edit_bibliographic()
@@ -719,8 +730,8 @@ class Article(Item):
         self.number_field = ui.input(label="Number", value=self.number).classes("w-20")
         self.pages_field = ui.input(label="Pages", value=self.pages)
 
-    def edit_xrefs(self):
-        super().edit_xrefs()
+    def edit_links(self):
+        super().edit_links()
         self.pmid_field = ui.input(label="PubMed", value=self.pmid)
         self.pmc_field = ui.input(label="PMC", value=self.pmc)
         self.paperpile_field = ui.input(label="Paperpile", value=self.paperpile)
@@ -733,14 +744,30 @@ class Article(Item):
         self.number = self.number_field.value
         self.pages = self.pages_field.value
 
-    def save_xrefs(self):
-        super().save_xrefs()
+    def save_links(self):
+        super().save_links()
         self.pmid = self.pmid_field.value
         self.pmc = self.pmc_field.value
         self.paperpile = self.paperpile_field.value
 
+    def from_bibtex(self, fields):
+        super().from_bibtex(fields)
+        self.journal = fields.get("journal")
+        self.issn = fields.get("issn")
+        self.volume = fields.get("volume")
+        self.pmid = fields.get("pmid")
+        self.pmc = fields.get("pmc")
 
-class Book(Item):
+
+class Book(Publication):
+
+    @property
+    def series(self):
+        return self.frontmatter.get("series") or ""
+
+    @series.setter
+    def series(self, value):
+        self.set_key_value("series", value)
 
     @property
     def isbn(self):
@@ -758,49 +785,29 @@ class Book(Item):
     def goodreads(self, value):
         self.set_key_value("goodreads", value)
 
-    @property
-    def series(self):
-        return self.frontmatter.get("series") or ""
+    def view_bibliographic(self):
+        super().view_bibliographic()
+        if self.series:
+            ui.label(self.series)
+        if self.number:
+            ui.label(self.number)
+        if self.pages:
+            ui.label(f"{self.pages} pp")
 
-    @series.setter
-    def series(self, value):
-        self.set_key_value("series", value)
-
-    def from_bibtex(self, fields):
-        super().from_bibtex(fields)
-        for key in ["series", "isbn"]:
-            try:
-                self.set_key_value(key, fields[key])
-            except KeyError:
-                pass
-
-    def view_additional(self):
-        ui.label("Info:").classes("text-italic")
-        with ui.row():
-            if self.series:
-                ui.label(self.series)
-            if self.number:
-                ui.label(self.number)
-            if self.pages:
-                ui.label(f"{self.pages} pp")
-        ui.label("Links:").classes("text-italic")
-        with ui.row():
-            if self.doi:
-                ui.link(f"DOI {self.doi}", f"https://doi.org/{self.doi}", new_tab=True)
-            if self.isbn:
-                ui.link(
-                    f"ISBN {self.isbn}",
-                    f"https://isbnsearch.org/isbn/{self.isbn}",
-                    new_tab=True,
-                )
-            if self.goodreads:
-                ui.link(
-                    "Goodreads",
-                    f"https://www.goodreads.com/book/show/{self.goodreads}",
-                    new_tab=True,
-                )
-            if self.paperpile:
-                ui.link("Paperpile", self.paperpile, new_tab=True)
+    def view_links(self):
+        super().view_links()
+        if self.isbn:
+            ui.link(
+                f"ISBN {self.isbn}",
+                f"https://isbnsearch.org/isbn/{self.isbn}",
+                new_tab=True,
+            )
+        if self.goodreads:
+            ui.link(
+                f"Goodreads {self.goodreads}",
+                f"https://www.goodreads.com/book/show/{self.goodreads}",
+                new_tab=True,
+            )
 
     def edit_bibliographic(self):
         super().edit_bibliographic()
@@ -808,11 +815,10 @@ class Book(Item):
         self.number_field = ui.input(label="Number", value=self.number)
         self.pages_field = ui.input(label="Pages", value=self.pages)
 
-    def edit_xrefs(self):
-        super().edit_xrefs()
+    def edit_links(self):
+        super().edit_links()
         self.isbn_field = ui.input(label="ISBN", value=self.isbn)
         self.goodreads_field = ui.input(label="Goodreads", value=self.goodreads)
-        self.paperpile_field = ui.input(label="Paperpile", value=self.paperpile)
 
     def save_bibliographic(self):
         super().save_bibliographic()
@@ -820,11 +826,90 @@ class Book(Item):
         self.number = self.number_field.value
         self.pages = self.pages_field.value
 
-    def save_xrefs(self):
-        super().save_xrefs()
+    def save_links(self):
+        super().save_links()
         self.isbn = self.isbn_field.value
         self.goodreads = self.goodreads_field.value
-        self.paperpile = self.paperpile_field.value
+
+    def from_bibtex(self, fields):
+        super().from_bibtex(fields)
+        self.series = fields.get("series")
+        self.isbn = fields.get("isbn")
+
+
+class Post(Item):
+    "Blog post, news item, or similar resource on the web."
+
+    @property
+    def href(self):
+        return self.frontmatter.get("href") or ""
+
+    @href.setter
+    def href(self, value):
+        self.set_key_value("href", value)
+
+    @property
+    def file(self):
+        return self.frontmatter.get("file") or ""
+
+    @file.setter
+    def file(self, value):
+        self.set_key_value("file", value)
+
+    @property
+    def retrieved(self):
+        return self.frontmatter.get("retrieved") or ""
+
+    @retrieved.setter
+    def retrieved(self, value):
+        self.set_key_value("retrieved", value)
+
+    def view_links(self):
+        global library
+        super().view_links()
+        ui.link(self.href, self.href, new_tab=True)
+        if self.file:
+            ui.link("Local copy", f"/file/{self.file}").classes("text-bold")
+            ui.label(self.retrieved)
+
+    def edit_links(self):
+        self.href_field = ui.input(label="Href", value=self.href).classes("w-120")
+        # File upload only when the reference is known; not during add, but when edit.
+        with ui.column():
+            if self.reference:
+                if self.file:
+                    ui.label(f"Local copy {(library.root_dir / self.file).stat().st_size} bytes")
+                    label = "New local copy"
+                else:
+                    label = "Local copy"
+                self.file_field = ui.upload(label=label, max_files=1, auto_upload=True, on_upload=lambda e: self.save_file(e), on_rejected=lambda: ui.notify("File too large; rejected.", type="warning", position="center"))
+                self.retrieved_field = ui.date_input(label="Retrieved", value=self.retrieved)
+
+    def save_links(self):
+        self.href = self.href_field.value
+        try:
+            self.retrieved = self.retrieved_field.value or str(datetime.date.today())
+        except AttributeError:
+            pass
+
+    async def save_file(self, e):
+        global library
+        content = await e.file.read()
+        suffix = mimetypes.guess_extension(e.file.content_type) or ".bin"
+        if suffix == ".md":
+            suffix = ".markdown"
+        self.file = self.identifier + suffix
+        (library.root_dir / self.file).write_bytes(content)
+
+    def delete(self):
+        global library
+        try:
+            filepath = library.root_dir / self.frontmatter["file"]
+        except KeyError:
+            pass
+        else:
+            filepath.rename(library.trash_dir / self.frontmatter["file"])
+        super().delete()
 
 
 library = Library()
@@ -839,16 +924,19 @@ def main():
         ui.label(f"Library v{__version__}")
         ui.button(
             "Add BibTex", color="secondary", on_click=lambda: ui.navigate.to("/bibtex")
-        )
+        ).props("no-caps")
         ui.button(
             "Add article",
             color="secondary",
             on_click=lambda: ui.navigate.to("/article"),
-        )
+        ).props("no-caps")
         ui.button(
             "Add book", color="secondary", on_click=lambda: ui.navigate.to("/book")
-        )
-        ui.button("Tags", color="info", on_click=lambda: ui.navigate.to("/tags"))
+        ).props("no-caps")
+        ui.button(
+            "Add post", color="secondary", on_click=lambda: ui.navigate.to("/post")
+        ).props("no-caps")
+        ui.button("Tags", color="info", on_click=lambda: ui.navigate.to("/tags")).props("no-caps")
     library.table_setup()
 
 
@@ -881,8 +969,8 @@ def add_bibtex():
         ui.label(f"Add bibtex")
     textarea = ui.textarea(label="BibTex source").classes("w-100")
     with ui.row():
-        ui.button("Parse", on_click=lambda: library.parse_bibtex(textarea.value))
-        ui.button("Cancel", on_click=lambda: ui.navigate.to("/").props("color=dark"))
+        ui.button("Parse", on_click=lambda: library.parse_bibtex(textarea.value)).props("no-caps")
+        ui.button("Cancel", on_click=lambda: ui.navigate.to("/").props("color=dark no-caps"))
 
 
 @ui.page("/article")
@@ -893,6 +981,10 @@ def add_article_page():
 @ui.page("/book")
 def add_book_page():
     Book().edit()
+
+@ui.page("/post")
+def add_book_page():
+    Post().edit()
 
 
 @ui.page("/tags")
@@ -922,7 +1014,7 @@ def tags_page():
     ).props("bordered").on("row-click", lambda e: ui.navigate.to(e.args[1]["url"]))
     with ui.row(align_items="baseline"):
         tag_field = ui.input(label="New tag")
-        ui.button("Add", on_click=lambda: add_tag(tag_field.value))
+        ui.button("Add", on_click=lambda: add_tag(tag_field.value)).props("no-caps")
 
 
 @ui.page("/tag/{tag}")
@@ -939,9 +1031,9 @@ def tag_page(tag: str):
         with ui.row():
             ui.button(
                 "Delete", on_click=lambda: ui.navigate.to(f"/tag/{tag}/delete")
-            ).props("color=negative")
+            ).props("color=negative no-caps")
             ui.button("Cancel", on_click=lambda: ui.navigate.to("/tags")).props(
-                "color=dark"
+                "color=dark no-caps"
             )
 
 
@@ -958,10 +1050,15 @@ def tag_delete_page(tag: str):
         ui.label("Delete tag?")
     ui.label(f"Really delete '{tag}' ?").classes("text-h4")
     with ui.row():
-        ui.button("Yes", on_click=do_delete).props("color=negative")
+        ui.button("Yes", on_click=do_delete).props("color=negative no-caps")
         ui.button("Cancel", on_click=lambda: ui.navigate.to(f"/tag/{tag}")).props(
-            "color=dark"
+            "color=dark no-caps"
         )
+
+@app.get("/file/{filename}")
+def file(filename: str):
+    global library
+    return FileResponse(library.root_dir / filename)
 
 
 ui.run(title="Library", favicon="📚")
