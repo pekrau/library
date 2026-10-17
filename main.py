@@ -38,7 +38,8 @@ MONTHS.update(
 )
 
 
-starlette.formparsers.MultiPartParser.spool_max_size = 1024 * 1024 * 32 # 32 MB
+starlette.formparsers.MultiPartParser.spool_max_size = 1024 * 1024 * 32  # 32 MB
+
 
 def normalize(s):
     "Normalize string to ASCII, fold case, replace non-file characters with '-'."
@@ -172,7 +173,9 @@ class Library:
             )
             self.text_filter = ui.input(label="Text", value=text)
             ui.button("Filter", on_click=lambda: self.table_refresh()).props("no-caps")
-            ui.button("Clear", on_click=lambda: self.table_inputs_clear()).props("no-caps")
+            ui.button("Clear", on_click=lambda: self.table_inputs_clear()).props(
+                "no-caps"
+            )
         self.table(title=title, author=author, year=year, tags=tags, text=text)
 
     def table_refresh(self):
@@ -446,7 +449,9 @@ class Item:
             with ui.row():
                 self.view_links()
         with ui.row(align_items="baseline"):
-            ui.button("Edit", on_click=lambda: ui.navigate.to(self.url_edit)).props("no-caps")
+            ui.button("Edit", on_click=lambda: ui.navigate.to(self.url_edit)).props(
+                "no-caps"
+            )
             ui.label(self.modified)
             ui.button("Delete", on_click=lambda: ui.navigate.to(self.url_delete)).props(
                 "color=negative no-caps"
@@ -869,7 +874,9 @@ class Post(Item):
         super().view_links()
         ui.link(self.href, self.href, new_tab=True)
         if self.file:
-            ui.link("Local copy", f"/file/{self.file}").classes("text-bold")
+            ui.link("Local copy", f"/file/{self.file}", new_tab=True).classes(
+                "text-bold"
+            )
             ui.label(self.retrieved)
 
     def edit_links(self):
@@ -878,12 +885,24 @@ class Post(Item):
         with ui.column():
             if self.reference:
                 if self.file:
-                    ui.label(f"Local copy {(library.root_dir / self.file).stat().st_size} bytes")
+                    ui.label(
+                        f"Local copy {(library.root_dir / self.file).stat().st_size} bytes"
+                    )
                     label = "New local copy"
                 else:
                     label = "Local copy"
-                self.file_field = ui.upload(label=label, max_files=1, auto_upload=True, on_upload=lambda e: self.save_file(e), on_rejected=lambda: ui.notify("File too large; rejected.", type="warning", position="center"))
-                self.retrieved_field = ui.date_input(label="Retrieved", value=self.retrieved)
+                self.file_field = ui.upload(
+                    label=label,
+                    max_files=1,
+                    auto_upload=True,
+                    on_upload=lambda e: self.save_file(e),
+                    on_rejected=lambda: ui.notify(
+                        "File too large; rejected.", type="warning", position="center"
+                    ),
+                )
+                self.retrieved_field = ui.date_input(
+                    label="Retrieved", value=self.retrieved
+                )
 
     def save_links(self):
         self.href = self.href_field.value
@@ -936,7 +955,9 @@ def main():
         ui.button(
             "Add post", color="secondary", on_click=lambda: ui.navigate.to("/post")
         ).props("no-caps")
-        ui.button("Tags", color="info", on_click=lambda: ui.navigate.to("/tags")).props("no-caps")
+        ui.button("Tags", color="info", on_click=lambda: ui.navigate.to("/tags")).props(
+            "no-caps"
+        )
     library.table_setup()
 
 
@@ -969,8 +990,12 @@ def add_bibtex():
         ui.label(f"Add bibtex")
     textarea = ui.textarea(label="BibTex source").classes("w-100")
     with ui.row():
-        ui.button("Parse", on_click=lambda: library.parse_bibtex(textarea.value)).props("no-caps")
-        ui.button("Cancel", on_click=lambda: ui.navigate.to("/").props("color=dark no-caps"))
+        ui.button("Parse", on_click=lambda: library.parse_bibtex(textarea.value)).props(
+            "no-caps"
+        )
+        ui.button(
+            "Cancel", on_click=lambda: ui.navigate.to("/").props("color=dark no-caps")
+        )
 
 
 @ui.page("/article")
@@ -981,6 +1006,7 @@ def add_article_page():
 @ui.page("/book")
 def add_book_page():
     Book().edit()
+
 
 @ui.page("/post")
 def add_book_page():
@@ -1054,6 +1080,7 @@ def tag_delete_page(tag: str):
         ui.button("Cancel", on_click=lambda: ui.navigate.to(f"/tag/{tag}")).props(
             "color=dark no-caps"
         )
+
 
 @app.get("/file/{filename}")
 def file(filename: str):
