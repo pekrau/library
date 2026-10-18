@@ -1,6 +1,6 @@
 "NiceGUI-based interface to library data."
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 import calendar
 import datetime
@@ -217,7 +217,7 @@ class Library:
         items = list(sorted(items, key=lambda i: i.modified, reverse=True))
         total = len(items)
         items = items[:MAX_ROWS]
-        ui.table(
+        table = ui.table(
             columns=[
                 dict(
                     name="reference", label="Reference", field="reference", align="left"
@@ -257,7 +257,14 @@ class Library:
                 for i in items
             ],
             row_key="name",
-        ).props("bordered").on("row-click", lambda e: ui.navigate.to(e.args[1]["url"]))
+        ).props("bordered")
+        with table.add_slot("body-cell-reference"):
+            with table.cell("reference"):
+                ui.button(icon="content_copy").props("flat").on(
+                    "click",
+                    js_handler=f"() => navigator.clipboard.writeText(props.row.reference)",
+                )
+                ui.link("Link").props(":href=props.row.url :innerHTML=props.value")
         with ui.row():
             if total > len(items):
                 ui.label(f"{len(items)} items shown,").classes("text-bold")
@@ -409,6 +416,74 @@ class Item:
         self.set_key_value("address", value)
 
     @property
+    def cites(self):
+        return self.frontmatter.get("cites", [])
+
+    @cites.setter
+    def cites(self, value):
+        global library
+        if isinstance(value, str):
+            value = value.split("\n")
+        elif not isinstance(value, list):
+            raise ValueError
+        value = [v.strip() for v in value if v in library]
+        if value := [v for v in value if v]:
+            self.frontmatter["cites"] = value
+        else:
+            self.frontmatter.pop("cites", None)
+
+    def cites_items(self):
+        global library
+        result = []
+        for reference in self.cites:
+            try:
+                result.append(library[reference])
+            except KeyError:
+                pass
+        return result
+
+    def cited_by_items(self):
+        global library
+        reference = self.reference
+        result = []
+        for item in library.items.values():
+            if reference in item.cites:
+                result.append(item)
+        return result
+
+    @property
+    def see_also(self):
+        return self.frontmatter.get("see_also", [])
+
+    @see_also.setter
+    def see_also(self, value):
+        global library
+        if isinstance(value, str):
+            value = value.split("\n")
+        elif not isinstance(value, list):
+            raise ValueError
+        value = [v.strip() for v in value]
+        if value := [v for v in value if v in library]:
+            self.frontmatter["see_also"] = value
+        else:
+            self.frontmatter.pop("see_also", None)
+
+    def see_also_items(self):
+        "Includes the reverse items."
+        global library
+        result = []
+        for reference in self.see_also:
+            try:
+                result.append(library[reference])
+            except KeyError:
+                pass
+        reference = self.reference
+        for item in library.items.values():
+            if reference in item.see_also:
+                result.append(item)
+        return result
+
+    @property
     def url_view(self):
         return f"/view/{self.identifier}"
 
@@ -426,9 +501,7 @@ class Item:
             ui.label(self.reference)
             ui.button(icon="content_copy").on(
                 "click",
-                js_handler=f"""
-    () => navigator.clipboard.writeText("{self.reference}")
-""",
+                js_handler=f'() => navigator.clipboard.writeText("{self.reference}")',
             )
         ui.label(self.title).classes("text-h5")
         with ui.grid(columns="auto auto"):
@@ -436,18 +509,25 @@ class Item:
             with ui.row():
                 for author in self.authors:
                     ui.label(author)
-            ui.label("Tags:").classes("text-italic")
+            ui.label("Tags").classes("text-italic")
             with ui.row():
                 for tag in self.tags:
                     ui.link(tag, f"/tag/{normalize(tag)}")
-            ui.label("Published:").classes("text-italic")
+            ui.label("Published").classes("text-italic")
             ui.label(self.published)
-            ui.label("Bibliographic:").classes("text-italic")
+            ui.label("Bibliography").classes("text-italic")
             with ui.row():
-                self.view_bibliographic()
-            ui.label("Links:").classes("text-italic")
+                self.view_bibliography()
+            ui.label("Links").classes("text-italic")
             with ui.row():
                 self.view_links()
+            ui.label("Cites").classes("text-italic")
+            self.view_items_list(self.cites_items())
+            ui.label("Cited by").classes("text-italic")
+            self.view_items_list(self.cited_by_items())
+            ui.label("See also").classes("text-italic")
+            with ui.row():
+                self.view_see_also()
         with ui.row(align_items="baseline"):
             ui.button("Edit", on_click=lambda: ui.navigate.to(self.url_edit)).props(
                 "no-caps"
@@ -458,12 +538,30 @@ class Item:
             )
         ui.markdown(self.text).classes("w-200")
 
-    def view_bibliographic(self):
+    def view_bibliography(self):
         ui.label(self.publisher)
         ui.label(self.address)
 
     def view_links(self):
         pass
+
+    def view_items_list(self, items):
+        with ui.list().props("dense"):
+            for item in items:
+                with ui.item():
+                    with ui.item_section():
+                        with ui.row():
+                            ui.link(item.reference, item.url_view)
+                            ui.label(item.title)
+
+    def view_see_also(self):
+        with ui.list().props("dense"):
+            for item in self.see_also_items():
+                with ui.item():
+                    with ui.item_section():
+                        with ui.row():
+                            ui.link(item.reference, item.url_view)
+                            ui.label(item.title)
 
     def edit(self):
         with ui.header().classes(f"text-h5"):
@@ -495,9 +593,14 @@ class Item:
                     .props("use-chips")
                 )
         with ui.row():
-            self.edit_bibliographic()
+            self.edit_bibliography()
         with ui.row():
             self.edit_links()
+        with ui.row():
+            self.cites_field = ui.textarea("Cites", value="\n".join(self.cites))
+            self.see_also_field = ui.textarea(
+                "See also", value="\n".join(self.see_also)
+            )
         self.text_field = ui.textarea("Text", value=self.text).classes("w-200")
         if self.reference:
             with ui.row():
@@ -508,7 +611,7 @@ class Item:
         else:
             ui.button("Add", on_click=self.save).props("no-caps")
 
-    def edit_bibliographic(self):
+    def edit_bibliography(self):
         self.publisher_field = ui.input(
             label="Publisher", value=self.publisher
         ).classes("w-50")
@@ -532,8 +635,10 @@ class Item:
                 self.reference_field.value
                 or f"{self.authors[0].split(',')[0]} {self.year}"
             )
-            self.save_bibliographic()
+            self.save_bibliography()
             self.save_links()
+            self.cites = self.cites_field.value
+            self.see_also = self.see_also_field.value
             self.text = self.text_field.value
         except (ValueError, TypeError, IndexError) as error:
             ui.notify(
@@ -543,7 +648,7 @@ class Item:
         self.write()
         ui.navigate.to(self.url_view)
 
-    def save_bibliographic(self):
+    def save_bibliography(self):
         self.publisher = self.publisher_field.value
         self.address = self.address_field.value
 
@@ -616,6 +721,10 @@ class Publication(Item):
     def view_links(self):
         super().view_links()
         if self.doi:
+            ui.button(icon="content_copy").props("flat").on(
+                "click",
+                js_handler=f'() => navigator.clipboard.writeText("{self.doi}")',
+            )
             ui.link(f"DOI {self.doi}", f"https://doi.org/{self.doi}", new_tab=True)
         if self.paperpile:
             ui.link("Paperpile", self.paperpile, new_tab=True)
@@ -698,8 +807,8 @@ class Article(Publication):
     def pmc(self, value):
         self.set_key_value("pmc", value)
 
-    def view_bibliographic(self):
-        super().view_bibliographic()
+    def view_bibliography(self):
+        super().view_bibliography()
         ui.label(self.journal or "-")
         for issn in self.issn:
             ui.link(
@@ -715,20 +824,28 @@ class Article(Publication):
     def view_links(self):
         super().view_links()
         if self.pmid:
+            ui.button(icon="content_copy").props("flat").on(
+                "click",
+                js_handler=f'() => navigator.clipboard.writeText("{self.pmid}")',
+            )
             ui.link(
                 f"PubMed {self.pmid}",
                 f"https://pubmed.ncbi.nlm.nih.gov/{self.pmid}/",
                 new_tab=True,
             )
         if self.pmc:
+            ui.button(icon="content_copy").props("flat").on(
+                "click",
+                js_handler=f'() => navigator.clipboard.writeText("{self.pmc}")',
+            )
             ui.link(
                 self.pmc,
                 f"https://pmc.ncbi.nlm.nih.gov/articles/{self.pmc}/",
                 new_tab=True,
             )
 
-    def edit_bibliographic(self):
-        super().edit_bibliographic()
+    def edit_bibliography(self):
+        super().edit_bibliography()
         self.journal_field = ui.input(label="Journal", value=self.journal)
         self.issn_field = ui.input(label="ISSN", value=", ".join(self.issn))
         self.volume_field = ui.input(label="Volume", value=self.volume).classes("w-20")
@@ -741,8 +858,8 @@ class Article(Publication):
         self.pmc_field = ui.input(label="PMC", value=self.pmc)
         self.paperpile_field = ui.input(label="Paperpile", value=self.paperpile)
 
-    def save_bibliographic(self):
-        super().save_bibliographic()
+    def save_bibliography(self):
+        super().save_bibliography()
         self.journal = self.journal_field.value
         self.issn = self.issn_field.value
         self.volume = self.volume_field.value
@@ -790,8 +907,8 @@ class Book(Publication):
     def goodreads(self, value):
         self.set_key_value("goodreads", value)
 
-    def view_bibliographic(self):
-        super().view_bibliographic()
+    def view_bibliography(self):
+        super().view_bibliography()
         if self.series:
             ui.label(self.series)
         if self.number:
@@ -802,20 +919,28 @@ class Book(Publication):
     def view_links(self):
         super().view_links()
         if self.isbn:
+            ui.button(icon="content_copy").props("flat").on(
+                "click",
+                js_handler=f'() => navigator.clipboard.writeText("{self.isbn}")',
+            )
             ui.link(
                 f"ISBN {self.isbn}",
                 f"https://isbnsearch.org/isbn/{self.isbn}",
                 new_tab=True,
             )
         if self.goodreads:
+            ui.button(icon="content_copy").props("flat").on(
+                "click",
+                js_handler=f'() => navigator.clipboard.writeText("{self.goodreads}")',
+            )
             ui.link(
                 f"Goodreads {self.goodreads}",
                 f"https://www.goodreads.com/book/show/{self.goodreads}",
                 new_tab=True,
             )
 
-    def edit_bibliographic(self):
-        super().edit_bibliographic()
+    def edit_bibliography(self):
+        super().edit_bibliography()
         self.series_field = ui.input(label="Series", value=self.series)
         self.number_field = ui.input(label="Number", value=self.number)
         self.pages_field = ui.input(label="Pages", value=self.pages)
@@ -825,8 +950,8 @@ class Book(Publication):
         self.isbn_field = ui.input(label="ISBN", value=self.isbn)
         self.goodreads_field = ui.input(label="Goodreads", value=self.goodreads)
 
-    def save_bibliographic(self):
-        super().save_bibliographic()
+    def save_bibliography(self):
+        super().save_bibliography()
         self.series = self.series_field.value
         self.number = self.number_field.value
         self.pages = self.pages_field.value
@@ -872,6 +997,10 @@ class Post(Item):
     def view_links(self):
         global library
         super().view_links()
+        ui.button(icon="content_copy").props("flat").on(
+            "click",
+            js_handler=f'() => navigator.clipboard.writeText("{self.href}")',
+        )
         ui.link(self.href, self.href, new_tab=True)
         if self.file:
             ui.link("Local copy", f"/file/{self.file}", new_tab=True).classes(
@@ -880,13 +1009,13 @@ class Post(Item):
             ui.label(self.retrieved)
 
     def edit_links(self):
-        self.href_field = ui.input(label="Href", value=self.href).classes("w-120")
-        # File upload only when the reference is known; not during add, but when edit.
         with ui.column():
+            self.href_field = ui.input(label="Href", value=self.href).classes("w-120")
+            # File upload only when the reference is known; not during add, but edit.
             if self.reference:
                 if self.file:
                     ui.label(
-                        f"Local copy {(library.root_dir / self.file).stat().st_size} bytes"
+                        f"Current local copy {(library.root_dir / self.file).stat().st_size} bytes"
                     )
                     label = "New local copy"
                 else:
