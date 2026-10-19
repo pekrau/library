@@ -1,6 +1,6 @@
 "NiceGUI-based interface to library data."
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 import calendar
 import datetime
@@ -416,6 +416,10 @@ class Item:
         self.set_key_value("address", value)
 
     @property
+    def files(self):
+        return self.frontmatter.get("files") or ""
+
+    @property
     def cites(self):
         return self.frontmatter.get("cites", [])
 
@@ -521,6 +525,9 @@ class Item:
             ui.label("Links").classes("text-italic")
             with ui.row():
                 self.view_links()
+            if self.files:
+                ui.label("Files").classes("text-italic")
+                self.view_files()
             ui.label("Cites").classes("text-italic")
             self.view_items_list(self.cites_items())
             ui.label("Cited by").classes("text-italic")
@@ -544,6 +551,13 @@ class Item:
 
     def view_links(self):
         pass
+
+    def view_files(self):
+        with ui.row():
+            with ui.grid(columns="auto auto"):
+                for file in self.files:
+                    ui.label(file["date"])
+                    ui.link(file["name"], f"/file/{file['name']}", new_tab=True)
 
     def view_items_list(self, items):
         with ui.list().props("dense"):
@@ -596,6 +610,7 @@ class Item:
             self.edit_bibliography()
         with ui.row():
             self.edit_links()
+        self.edit_files()
         with ui.row():
             self.cites_field = ui.textarea("Cites", value="\n".join(self.cites))
             self.see_also_field = ui.textarea(
@@ -620,6 +635,48 @@ class Item:
     def edit_links(self):
         self.doi_field = ui.input(label="DOI", value=self.doi)
 
+    @ui.refreshable
+    def edit_files(self):
+        self._delete_file_fields = {}
+        if not self.reference:
+            return
+        # Cannot add file when not yet created.
+        with ui.row():
+            ui.upload(
+                label="Upload file",
+                max_files=1,
+                auto_upload=True,
+                on_upload=lambda e: self.add_file(e),
+                on_rejected=lambda: ui.notify(
+                    "File too large; rejected.", type="warning", position="center"
+                ),
+            )
+            with ui.grid(columns=1):
+                for file in self.files:
+                    with ui.row(align_items="center"):
+                        self._delete_file_fields[file["name"]] = ui.checkbox("Delete")
+                        ui.label(file["date"])
+                        ui.label(file["name"])
+
+    async def add_file(self, e):
+        global library
+        content = await e.file.read()
+        suffix = mimetypes.guess_extension(e.file.content_type) or ".bin"
+        if suffix == ".md":
+            suffix = ".markdown"
+        stem = pathlib.Path(e.file.name).stem
+        filename = f"{stem}{suffix}"
+        number = 0
+        while (library.root_dir / filename).exists():
+            number += 1
+            filename = f"{stem}_{number}{suffix}"
+        self.frontmatter.setdefault("files", []).append(
+            dict(name=filename, date=str(datetime.date.today()))
+        )
+        (library.root_dir / filename).write_bytes(content)
+        self.write()
+        self.edit_files.refresh()
+
     def save(self):
         try:
             self.title = self.title_field.value
@@ -637,6 +694,7 @@ class Item:
             )
             self.save_bibliography()
             self.save_links()
+            self.save_files()
             self.cites = self.cites_field.value
             self.see_also = self.see_also_field.value
             self.text = self.text_field.value
@@ -654,6 +712,17 @@ class Item:
 
     def save_links(self):
         self.doi = self.doi_field.value
+
+    def save_files(self):
+        "Misnomer; only deletes marked files."
+        global library
+        for filename, field in self._delete_file_fields.items():
+            if field.value:
+                for pos, file in enumerate(self.files):
+                    if file["name"] == filename:
+                        self.frontmatter["files"].pop(pos)
+                        break
+                (library.root_dir / filename).unlink()
 
     def write(self):
         if self.filepath.exists():
@@ -679,6 +748,8 @@ class Item:
     def delete(self):
         global library
         library.items.pop(self.identifier)
+        for file in self.files:
+            (library.root_dir / file["name"]).rename(library.trash_dir / file["name"])
         self.filepath.rename(library.trash_dir / self.filename)
         ui.navigate.to("/")
 
@@ -1002,52 +1073,13 @@ class Post(Item):
             js_handler=f'() => navigator.clipboard.writeText("{self.href}")',
         )
         ui.link(self.href, self.href, new_tab=True)
-        if self.file:
-            ui.link("Local copy", f"/file/{self.file}", new_tab=True).classes(
-                "text-bold"
-            )
-            ui.label(self.retrieved)
 
     def edit_links(self):
         with ui.column():
-            self.href_field = ui.input(label="Href", value=self.href).classes("w-120")
-            # File upload only when the reference is known; not during add, but edit.
-            if self.reference:
-                if self.file:
-                    ui.label(
-                        f"Current local copy {(library.root_dir / self.file).stat().st_size} bytes"
-                    )
-                    label = "New local copy"
-                else:
-                    label = "Local copy"
-                self.file_field = ui.upload(
-                    label=label,
-                    max_files=1,
-                    auto_upload=True,
-                    on_upload=lambda e: self.save_file(e),
-                    on_rejected=lambda: ui.notify(
-                        "File too large; rejected.", type="warning", position="center"
-                    ),
-                )
-                self.retrieved_field = ui.date_input(
-                    label="Retrieved", value=self.retrieved
-                )
+            self.href_field = ui.input(label="Href", value=self.href).classes("w-200")
 
     def save_links(self):
         self.href = self.href_field.value
-        try:
-            self.retrieved = self.retrieved_field.value or str(datetime.date.today())
-        except AttributeError:
-            pass
-
-    async def save_file(self, e):
-        global library
-        content = await e.file.read()
-        suffix = mimetypes.guess_extension(e.file.content_type) or ".bin"
-        if suffix == ".md":
-            suffix = ".markdown"
-        self.file = self.identifier + suffix
-        (library.root_dir / self.file).write_bytes(content)
 
     def delete(self):
         global library
