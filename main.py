@@ -1,6 +1,6 @@
 "NiceGUI-based interface to library data."
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 
 import calendar
 import datetime
@@ -163,22 +163,21 @@ class Library:
 
     def table_setup(self, title="", author="", year="", tags=None, text=""):
         with ui.row(align_items="baseline"):
-            self.title_filter = ui.input(label="Title", value=title)
-            self.author_filter = ui.input(label="Author", value=author)
-            self.year_filter = ui.input(label="Year", value=year)
+            self.title_filter = ui.input(label="Title", value=title, on_change=lambda: self.table_filter())
+            self.author_filter = ui.input(label="Author", value=author, on_change=lambda: self.table_filter())
+            self.year_filter = ui.input(label="Year", value=year, on_change=lambda: self.table_filter())
             self.tags_filter = (
-                ui.select(library.tags, label="Tags", multiple=True, value=tags)
+                ui.select(library.tags, label="Tags", multiple=True, value=tags, on_change=lambda: self.table_filter())
                 .classes("w-80")
                 .props("use-chips")
             )
-            self.text_filter = ui.input(label="Text", value=text)
-            ui.button("Filter", on_click=lambda: self.table_refresh()).props("no-caps")
+            self.text_filter = ui.input(label="Text", value=text, on_change=lambda: self.table_filter())
             ui.button("Clear", on_click=lambda: self.table_inputs_clear()).props(
                 "no-caps"
             )
         self.table(title=title, author=author, year=year, tags=tags, text=text)
 
-    def table_refresh(self):
+    def table_filter(self):
         args = dict()
         args["title"] = self.title_filter.value.strip()
         args["author"] = self.author_filter.value.strip()
@@ -188,12 +187,16 @@ class Library:
         self.table.refresh(**args)
 
     def table_inputs_clear(self):
-        self.title_filter.set_value("")
-        self.author_filter.set_value("")
-        self.year_filter.set_value("")
-        self.tags_filter.set_value(None)
-        self.text_filter.set_value("")
-        self.table_refresh()
+        if self.title_filter.value:
+            self.title_filter.set_value("")
+        if self.author_filter.value:
+            self.author_filter.set_value("")
+        if self.year_filter.value:
+            self.year_filter.set_value("")
+        if self.tags_filter.value:
+            self.tags_filter.set_value(None)
+        if self.text_filter.value:
+            self.text_filter.set_value("")
 
     @ui.refreshable
     def table(self, title=None, author=None, year=None, tags=None, text=None):
