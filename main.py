@@ -1,6 +1,6 @@
 "NiceGUI-based interface to library data."
 
-__version__ = "0.6.1"
+__version__ = "0.6.3"
 
 import calendar
 import datetime
@@ -163,15 +163,29 @@ class Library:
 
     def table_setup(self, title="", author="", year="", tags=None, text=""):
         with ui.row(align_items="baseline"):
-            self.title_filter = ui.input(label="Title", value=title, on_change=lambda: self.table_filter())
-            self.author_filter = ui.input(label="Author", value=author, on_change=lambda: self.table_filter())
-            self.year_filter = ui.input(label="Year", value=year, on_change=lambda: self.table_filter())
+            self.title_filter = ui.input(
+                label="Title", value=title, on_change=lambda: self.table_filter()
+            )
+            self.author_filter = ui.input(
+                label="Author", value=author, on_change=lambda: self.table_filter()
+            )
+            self.year_filter = ui.input(
+                label="Year", value=year, on_change=lambda: self.table_filter()
+            )
             self.tags_filter = (
-                ui.select(library.tags, label="Tags", multiple=True, value=tags, on_change=lambda: self.table_filter())
+                ui.select(
+                    library.tags,
+                    label="Tags",
+                    multiple=True,
+                    value=tags,
+                    on_change=lambda: self.table_filter(),
+                )
                 .classes("w-80")
                 .props("use-chips")
             )
-            self.text_filter = ui.input(label="Text", value=text, on_change=lambda: self.table_filter())
+            self.text_filter = ui.input(
+                label="Text", value=text, on_change=lambda: self.table_filter()
+            )
             ui.button("Clear", on_click=lambda: self.table_inputs_clear()).props(
                 "no-caps"
             )
@@ -201,24 +215,25 @@ class Library:
     @ui.refreshable
     def table(self, title=None, author=None, year=None, tags=None, text=None):
         items = self.items.values()
-        if title:
-            title = title.casefold()
-            items = [i for i in items if title in i.title.casefold()]
+        # Guessing most efficient filtering order...
+        if tags:
+            tags = set(tags)
+            items = [i for i in items if not tags.difference(set(i.tags))]
+        if year:
+            items = [i for i in items if i.year.startswith(year)]
         if author:
             author = author.casefold()
             items = [
                 i for i in items if author in "\n".join(i.authors_short).casefold()
             ]
-        if year:
-            items = [i for i in items if i.year.startswith(year)]
-        if tags:
-            tags = set(tags)
-            items = [i for i in items if not tags.difference(set(i.tags))]
+        if title:
+            title = title.casefold()
+            items = [i for i in items if title in i.title.casefold()]
         if text:
             text = text.casefold()
             items = [i for i in items if text in i.text.casefold()]
         items = list(sorted(items, key=lambda i: i.modified, reverse=True))
-        total = len(items)
+        found = len(items)
         items = items[:MAX_ROWS]
         table = ui.table(
             columns=[
@@ -269,10 +284,9 @@ class Library:
                 )
                 ui.link("Link").props(":href=props.row.url :innerHTML=props.value")
         with ui.row():
-            if total > len(items):
-                ui.label(f"{len(items)} items shown,").classes("text-bold")
-            ui.label(f"{total} items found,")
-            ui.label(f"{len(library.items)} total items.")
+            ui.label(
+                f"Showing {len(items)} of {found}. A total of {len(library.items)} in library"
+            )
 
 
 class Item:
@@ -300,7 +314,7 @@ class Item:
             raise ValueError("reference already exists in library")
         if self.identifier:
             library.items.pop(self.identifier)
-            self.filepath.rename(library.trash_dir / self.filename)
+            self.filepath.move_into(library.trash_dir)
             # Special case: Post instance may have an uploaded file.
             try:
                 file = pathlib.Path(library.root_dir / self.frontmatter["file"])
@@ -358,6 +372,11 @@ class Item:
             self.frontmatter["authors"] = value
         else:
             self.frontmatter["authors"] = ["Anonymous"]
+        for pos, name in enumerate(self.frontmatter["authors"]):
+            if "," not in name:
+                if len(parts := name.split()) >= 2:
+                    name = f"{' '.join(parts[1:])}, {parts[0]}"
+                    self.frontmatter["authors"][pos] = name
 
     @property
     def authors_short(self):
@@ -515,7 +534,7 @@ class Item:
             ui.label(self.year).classes("text-bold")
             with ui.row():
                 for author in self.authors:
-                    ui.label(author)
+                    ui.link(author, f"/?author={author}")
             ui.label("Tags").classes("text-italic")
             with ui.row():
                 for tag in self.tags:
@@ -729,7 +748,7 @@ class Item:
 
     def write(self):
         if self.filepath.exists():
-            self.filepath.rename(library.trash_dir / self.filename)
+            self.filepath.move_into(library.trash_dir)
         with self.filepath.open(mode="w", encoding="utf-8") as outfile:
             outfile.write("---\n")
             outfile.write(yaml.safe_dump(self.frontmatter, allow_unicode=True))
@@ -752,8 +771,8 @@ class Item:
         global library
         library.items.pop(self.identifier)
         for file in self.files:
-            (library.root_dir / file["name"]).rename(library.trash_dir / file["name"])
-        self.filepath.rename(library.trash_dir / self.filename)
+            (library.root_dir / file["name"]).move_into(library.trash_dir)
+        self.filepath.move_into(library.trash_dir)
         ui.navigate.to("/")
 
 
@@ -1091,7 +1110,7 @@ class Post(Item):
         except KeyError:
             pass
         else:
-            filepath.rename(library.trash_dir / self.frontmatter["file"])
+            filepath.move_into(library.trash_dir)
         super().delete()
 
 
@@ -1100,10 +1119,10 @@ library.read()
 
 
 @ui.page("/")
-def main():
+def main(author: str = ""):
     global library
     with ui.header().classes(f"text-h5"):
-        ui.label("📚")
+        ui.link("📚", "/").style("text-decoration: none;")
         ui.label(f"Library v{__version__}")
         ui.button(
             "Add BibTex", color="secondary", on_click=lambda: ui.navigate.to("/bibtex")
@@ -1122,7 +1141,7 @@ def main():
         ui.button("Tags", color="info", on_click=lambda: ui.navigate.to("/tags")).props(
             "no-caps"
         )
-    library.table_setup()
+    library.table_setup(author=author)
 
 
 @ui.page("/view/{identifier}")
