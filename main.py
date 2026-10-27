@@ -1,6 +1,6 @@
 "NiceGUI-based interface to library data."
 
-__version__ = "0.6.3"
+__version__ = "0.6.4"
 
 import calendar
 import datetime
@@ -145,13 +145,8 @@ class Library:
                 author = item.authors[0]
             else:
                 author = "Anonymous"
-            base_reference = f"{author.split(',')[0].strip()} {item.year}"
-            reference = base_reference
-            letters = list(string.ascii_lowercase)
-            # Until reference is unique.
-            while reference in self:
-                reference = base_reference + letters.pop(0)
-            item.reference = reference
+            # This will generate the reference for the item.
+            item.reference = None
             item.write()
             items.append(item)
         if len(items) == 1:
@@ -306,22 +301,37 @@ class Item:
     @reference.setter
     def reference(self, new):
         global library
+        # Generate the reference, if not already defined.
         if not new:
-            raise ValueError("null reference")
-        if new == self.reference:
-            return
-        if new in library:
-            raise ValueError("reference already exists in library")
-        if self.identifier:
-            library.items.pop(self.identifier)
-            self.filepath.move_into(library.trash_dir)
-            # Special case: Post instance may have an uploaded file.
-            try:
-                file = pathlib.Path(library.root_dir / self.frontmatter["file"])
-            except KeyError:
-                pass
+            if self.reference:
+                return
+            if self.authors:
+                author = self.authors[0]
             else:
-                self.file = file.rename(file.with_stem(normalize(new))).name
+                author = "Anonymous"
+            base_reference = f"{author.split(',')[0]} {self.year}"
+            letters = list(string.ascii_lowercase)
+            # Is there already an 'a'-suffix reference? Then try other suffixes.
+            if (base_reference + letters[0]) in library:
+                letters.pop(0)  # Get rid of 'a', since already tested.
+                new = base_reference + letters.pop(0)
+            # Otherwise try first without suffix.
+            else:
+                new = base_reference
+            # Find unique reference looping over suffix letters.
+            while new in library:
+                new = base_reference + letters.pop(0)
+        # No change.
+        elif new == self.reference:
+            return
+        # Change reference for this item.
+        else:
+            if new in library:
+                raise ValueError("reference already exists in library")
+            if self.identifier:
+                library.items.pop(self.identifier)
+                self.filepath.move_into(library.trash_dir)
+        # Attached files do not need to be renamed.
         self.frontmatter["reference"] = new
         library.items[self.identifier] = self
 
@@ -439,7 +449,7 @@ class Item:
 
     @property
     def files(self):
-        return self.frontmatter.get("files") or ""
+        return self.frontmatter.get("files", [])
 
     @property
     def cites(self):
@@ -660,9 +670,9 @@ class Item:
     @ui.refreshable
     def edit_files(self):
         self._delete_file_fields = {}
+        # May not add file to item before it has been created.
         if not self.reference:
             return
-        # Cannot add file when not yet created.
         with ui.row():
             ui.upload(
                 label="Upload file",
@@ -710,10 +720,7 @@ class Item:
                 self.published = published + "-01"
             else:
                 self.published = published
-            self.reference = (
-                self.reference_field.value
-                or f"{self.authors[0].split(',')[0]} {self.year}"
-            )
+            self.reference = self.reference_field.value.strip()
             self.save_bibliography()
             self.save_links()
             self.save_files()
